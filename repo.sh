@@ -183,7 +183,7 @@ publish_feeds() {
 	if gh release view "$tag" >/dev/null 2>&1; then
 		release_prune "$tag" "$all" $prefixes || return 1
 	else
-		gh release create "$tag" --title "roamd $version" --notes "Пакеты roamd $version для веток 23.05, 24.10 и 25.12."
+		gh release create "$tag" --title "roamd $version" --notes "Пакеты roamd $version для OpenWrt 25.12 (aarch64_cortex-a53, mediatek/filogic)."
 	fi
 
 	gh release upload "$tag" "$all"/* --clobber || return 1
