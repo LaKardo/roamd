@@ -120,7 +120,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: feed-${{ matrix.branch }}-${{ matrix.arch }}
-          path: dist/${{ matrix.branch }}/${{ matrix.arch }}/*
+          path: dist/
           retention-days: 1
           if-no-files-found: error
 
@@ -137,8 +137,20 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          path: feeds
+          path: dist
           pattern: feed-*
+          merge-multiple: true
+
+      - name: Arrange feeds
+        run: |
+          mkdir -p feeds
+          for dir in dist/*/*; do
+            [ -d "$dir" ] || continue
+            arch=$(basename "$dir")
+            branch=$(basename "$(dirname "$dir")")
+            mv "$dir" "feeds/feed-$branch-$arch"
+          done
+          ls -R feeds
 
       - name: Publish per-feed releases
         env:
