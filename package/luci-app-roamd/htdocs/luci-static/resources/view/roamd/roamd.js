@@ -112,7 +112,7 @@ function renderInterfaces() {
 		])
 	]);
 
-	cbi_update_table(table, rows, E('em', {}, _('No wireless interfaces found')));
+	cbi_update_table(table, common.textRows(rows), E('em', {}, _('No wireless interfaces found')));
 
 	return table;
 }
@@ -154,7 +154,7 @@ function renderClients() {
 		])
 	]);
 
-	cbi_update_table(table, rows, E('em', {}, _('No connected clients')));
+	cbi_update_table(table, common.textRows(rows), E('em', {}, _('No connected clients')));
 
 	return table;
 }

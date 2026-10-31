@@ -12,7 +12,7 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   matrix:
@@ -23,10 +23,15 @@ jobs:
       version: ${{ steps.build.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - id: build
+        env:
+          WANTED: ${{ github.event.inputs.branches }}
         run: |
-          wanted="${{ github.event.inputs.branches }}"
+          wanted="$WANTED"
+          case "$wanted" in *[!a-zA-Z0-9.\ -]*) echo "bad branches input" >&2; exit 1 ;; esac
           [ -n "$wanted" ] || wanted=$(awk '{ print $1 }' targets/branches.txt)
 
           {
@@ -58,6 +63,8 @@ jobs:
         include: ${{ fromJSON(needs.matrix.outputs.jobs) }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install build dependencies
         run: |
@@ -74,8 +81,11 @@ jobs:
           key: feeds-${{ matrix.release }}
 
       - name: Build packages
+        env:
+          RELEASE: ${{ matrix.release }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          if ! RELEASE=${{ matrix.release }} ./build.sh ${{ matrix.arch }}; then
+          if ! ./build.sh "$ARCH"; then
             echo "::group::Журнал сборки SDK"
             find build -name build.log -exec sh -c 'echo "--- $1"; tail -n 200 "$1"' _ {} \;
             echo "::endgroup::"
@@ -102,7 +112,10 @@ jobs:
           chmod 600 /tmp/keys/* 2>/dev/null || true
 
       - name: Build repository index
-        run: ./repo.sh index-feed ${{ matrix.branch }} ${{ matrix.arch }} /tmp/keys
+        env:
+          BRANCH: ${{ matrix.branch }}
+          ARCH: ${{ matrix.arch }}
+        run: ./repo.sh index-feed "$BRANCH" "$ARCH" /tmp/keys
 
       - uses: actions/upload-artifact@v7
         with:
@@ -115,8 +128,12 @@ jobs:
     name: Publish release
     runs-on: ubuntu-24.04
     needs: [matrix, build]
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@v8
         with:
@@ -127,4 +144,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: ./repo.sh publish feeds ${{ needs.matrix.outputs.version }}
+          VERSION: ${{ needs.matrix.outputs.version }}
+        run: ./repo.sh publish feeds "$VERSION"

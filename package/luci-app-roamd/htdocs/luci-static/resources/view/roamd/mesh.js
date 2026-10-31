@@ -26,14 +26,16 @@ var callMeshClientForget = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_client_forget',
 	params: [ 'mac' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshClientUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_client_update',
 	params: [ 'mac', 'band', 'alias', 'nodes' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshDiscover = rpc.declare({
@@ -47,7 +49,8 @@ var callMeshAcquire = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_acquire',
 	params: [ 'addr', 'reset' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshAcquireStatus = rpc.declare({
@@ -61,7 +64,8 @@ var callMeshMemberRemove = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_member_remove',
 	params: [ 'id', 'reset' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshLog = rpc.declare({
@@ -74,20 +78,23 @@ var callMeshUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_update',
 	params: [ 'id' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshSelfUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_self_update',
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshMemberUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_member_update',
 	params: [ 'id', 'name', 'nodes' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshSettings = rpc.declare({
@@ -96,21 +103,24 @@ var callMeshSettings = rpc.declare({
 	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'node_ui',
 		'backhaul_delta', 'backhaul_min_signal', 'auto_update', 'auto_update_every',
 		'auto_update_unit', 'pkg_url' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshNetworkUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_network_update',
 	params: [ 'ssid', 'roaming' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshControllerName = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_settings',
 	params: [ 'controller_name' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var EVENT_TYPE = {
@@ -180,7 +190,7 @@ function nodeCell(node, band) {
 	if (!node && !band)
 		return '-';
 
-	return common.twoLine(E('span', {}, nodeTitle(node)), band ? common.bandLabel(band) : '');
+	return common.twoLine(E('span', {}, [ nodeTitle(node) ]), band ? common.bandLabel(band) : '');
 }
 
 function timeCell(ts) {
@@ -396,18 +406,18 @@ var PKG_STATE_TEXT = {
 function renderCandidate(c) {
 	var ready = c.pkg === 'ready';
 	var lines = [
-		E('strong', {}, c.name || c.addr),
+		E('strong', {}, [ c.name || c.addr ]),
 		E('br'),
-		E('small', {}, '%s · %s · %s · OpenWrt %s'.format(c.addr, c.mac, c.model || '?', c.os || '?'))
+		E('small', {}, [ '%s · %s · %s · OpenWrt %s'.format(c.addr, c.mac, c.model || '?', c.os || '?') ])
 	];
 
 	if (!ready)
 		lines.push(E('div', { 'style': 'color:#c33' }, E('small', {},
-			PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?'))));
+			[ PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?') ])));
 
 	if (c.conflict)
 		lines.push(E('div', { 'style': 'color:#c60' }, E('small', {},
-			PKG_STATE_TEXT.conflict.format(c.conflict))));
+			[ PKG_STATE_TEXT.conflict.format(c.conflict) ])));
 
 	var action = E('button', {
 		'class': 'btn cbi-button cbi-button-action',
@@ -460,7 +470,7 @@ function startAcquire(addr, button, reset) {
 
 		if (res.error && !res.task_id) {
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
@@ -470,7 +480,7 @@ function startAcquire(addr, button, reset) {
 			dom.content(body, E('p', {}, _('This node is already being captured, showing the progress.')));
 
 		pollAcquire(res.task_id, body, 0, 'acquire');
-	});
+	}, common.rpcError);
 }
 
 function acquireProgress(steps, kind) {
@@ -534,7 +544,7 @@ function pollAcquire(task, body, misses, kind) {
 			}
 
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); location.reload(); } }, _('Close')))
 			]);
 			return;
@@ -584,7 +594,7 @@ function renderNodes(state) {
 
 	var deps = state.deps_ready ? '' : E('div', { 'class': 'alert-message warning' }, [
 		E('strong', {}, _('Preparing the controller is not finished')),
-		E('div', {}, state.deps_state || _('the required packages are not installed yet')),
+		E('div', {}, [ state.deps_state || _('the required packages are not installed yet') ]),
 		E('div', {}, E('small', {}, _('The controller retries by itself every five minutes; make sure it has Internet access.')))
 	]);
 
@@ -608,9 +618,9 @@ function renderNodes(state) {
 
 	var running = !busy ? '' : E('div', { 'class': 'alert-message' }, [
 		E('strong', {}, kindNote),
-		E('div', {}, state.acquire.addr
+		E('div', {}, [ state.acquire.addr
 			? _('Device %s, it takes a few minutes. Do not start another task and do not reset the device.').format(state.acquire.addr)
-			: _('It takes a few minutes. Do not start another task and do not reset the device.')),
+			: _('It takes a few minutes. Do not start another task and do not reset the device.') ]),
 		E('div', {}, E('button', {
 			'class': 'btn cbi-button',
 			'click': function() {
@@ -645,7 +655,7 @@ function renderNodes(state) {
 			connectionCell(m), actions ];
 	}));
 
-	cbi_update_table(table, rows, E('em', {}, _('No nodes yet')));
+	cbi_update_table(table, common.textRows(rows), E('em', {}, _('No nodes yet')));
 
 	return E('div', {}, [ deps, running, intro, E('div', {}, addButton), E('br'), table ]);
 }
@@ -703,7 +713,7 @@ function controllerDialog(state) {
 
 	function save() {
 		ui.hideModal();
-		callMeshControllerName(nameInput.value).then(refreshNodes);
+		callMeshControllerName(nameInput.value).then(refreshNodes, common.rpcError);
 	}
 
 	var actions = readOnly || state.auto_update ? [] : [
@@ -736,7 +746,7 @@ function controllerDialog(state) {
 function controllerRow(state) {
 	var self = state.self || {};
 	var name = state.controller_name || self.hostname || _('This device');
-	var cell = common.twoLine(E('strong', {}, name), _('controller'));
+	var cell = common.twoLine(E('strong', {}, [ name ]), _('controller'));
 	var check = E('button', {
 		'class': 'btn cbi-button',
 		'click': function() { controllerDialog(state); }
@@ -775,9 +785,9 @@ function checkSelfUpdate() {
 
 		var rows = res.packages.map(function(p) {
 			return E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td' }, p.name),
-				E('td', { 'class': 'td' }, p.installed || '-'),
-				E('td', { 'class': 'td' }, p.available || '-'),
+				E('td', { 'class': 'td' }, [ p.name ]),
+				E('td', { 'class': 'td' }, [ p.installed || '-' ]),
+				E('td', { 'class': 'td' }, [ p.available || '-' ]),
 				E('td', { 'class': 'td' }, p.outdated ? E('strong', { 'style': 'color:#c60' }, _('update available')) : _('up to date'))
 			]);
 		});
@@ -815,14 +825,14 @@ function startSelfUpdate(body) {
 
 		if (res.error && !res.task_id) {
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
 		}
 
 		pollAcquire(res.task_id, body, 0, 'selfupdate');
-	});
+	}, common.rpcError);
 }
 
 function nameCell(m) {
@@ -836,7 +846,7 @@ function nameCell(m) {
 		'style': 'text-decoration:none;margin-left:.4em'
 	}, '🌐') : '';
 
-	return common.twoLine(E('div', {}, [ E('strong', {}, alias), link ]), sys);
+	return common.twoLine(E('div', {}, [ E('strong', {}, [ alias ]), link ]), sys);
 }
 
 function refreshNodes() {
@@ -903,7 +913,7 @@ function removeMember(id, name) {
 					ui.showModal(_('Remove the node'), [ body ]);
 
 					if (!wipe) {
-						callMeshMemberRemove(id).then(function() { location.reload(); });
+						callMeshMemberRemove(id).then(function() { location.reload(); }, common.rpcError);
 						return;
 					}
 
@@ -912,14 +922,14 @@ function removeMember(id, name) {
 
 						if (res.error && !res.task_id) {
 							dom.content(body, [
-								E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+								E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 								E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); location.reload(); } }, _('Close')))
 							]);
 							return;
 						}
 
 						pollAcquire(res.task_id, body, 0, 'release');
-					});
+					}, common.rpcError);
 				}
 			}, _('Remove'))
 		])
@@ -933,13 +943,13 @@ function updateMember(id, name) {
 	callMeshUpdate(id).then(function(res) {
 		if (res && res.error) {
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
 		}
 		pollAcquire(res.task_id, body, 0, 'update');
-	});
+	}, common.rpcError);
 }
 
 function renderLog() {
@@ -972,7 +982,7 @@ function renderLog() {
 		});
 
 		counter.textContent = _('Showing %d of %d records').format(shown.length, all.length);
-		cbi_update_table(table, shown.map(logRow), E('em', {}, _('The transition log is empty')));
+		cbi_update_table(table, common.textRows(shown.map(logRow)), E('em', {}, _('The transition log is empty')));
 	}
 
 	function filterInput(key, ph) {
@@ -1085,7 +1095,7 @@ var readOnly = false;
 function infoRow(label, value) {
 	return E('div', { 'class': 'cbi-value' }, [
 		E('label', { 'class': 'cbi-value-title' }, label),
-		E('div', { 'class': 'cbi-value-field' }, value)
+		E('div', { 'class': 'cbi-value-field' }, typeof(value) === 'string' ? [ value ] : value)
 	]);
 }
 
@@ -1205,12 +1215,12 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		ui.hideModal();
 		callMeshClientUpdate(c.mac, bands.filter(function(l) { return l.firstChild.checked; })
 			.map(function(l) { return l.firstChild.value; })[0] || 'both',
-			nameInput.value, chips.value()).then(refresh);
+			nameInput.value, chips.value()).then(refresh, common.rpcError);
 	}
 
 	function forget() {
 		ui.hideModal();
-		callMeshClientForget(c.mac).then(refresh);
+		callMeshClientForget(c.mac).then(refresh, common.rpcError);
 	}
 
 	var buttons = readOnly
@@ -1297,7 +1307,7 @@ function nodeDialog(m, state, refresh) {
 
 	function save() {
 		ui.hideModal();
-		callMeshMemberUpdate(m.id, nameInput.value, chips.value()).then(refresh);
+		callMeshMemberUpdate(m.id, nameInput.value, chips.value()).then(refresh, common.rpcError);
 	}
 
 	var busy = state.acquire && state.acquire.running;
@@ -1367,7 +1377,7 @@ function clientNameCell(c, hints, ov, nodeName) {
 		'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%%;margin-right:.5em;background:%s'
 			.format(clientState(c).color)
 	});
-	var lines = [ E('div', {}, [ dot, E('strong', {}, alias) ]) ];
+	var lines = [ E('div', {}, [ dot, E('strong', {}, [ alias ]) ]) ];
 
 	return E('div', {}, lines);
 }
@@ -1379,7 +1389,7 @@ function addrCell(c, hints) {
 		var ip4 = hintIp4(hints, c.mac);
 
 		if (ip4)
-			lines.push(E('div', {}, ip4));
+			lines.push(E('div', {}, [ ip4 ]));
 		hintIp6(hints, c.mac).forEach(function(a) {
 			lines.push(common.note(a, '#2196a5'));
 		});
@@ -1522,8 +1532,8 @@ function renderClients(state) {
 				(clientSeen(c) ? up : down).push(clientRow(c, hints, ov, nodeName, allNodes, refresh));
 			});
 
-			cbi_update_table(online.table, up, E('em', {}, _('No clients online')));
-			cbi_update_table(offline.table, down, E('em', {}, _('No offline clients')));
+			cbi_update_table(online.table, common.textRows(up), E('em', {}, _('No clients online')));
+			cbi_update_table(offline.table, common.textRows(down), E('em', {}, _('No offline clients')));
 			offline.title.style.display = down.length ? '' : 'none';
 			offline.table.style.display = down.length ? '' : 'none';
 		});
@@ -1612,8 +1622,8 @@ function renderNetworks(state) {
 		});
 
 		rows.push(E('div', { 'class': 'tr' }, [
-			E('div', { 'class': 'td' }, net.ssid),
-			E('div', { 'class': 'td' }, net.encryption || 'none'),
+			E('div', { 'class': 'td' }, [ net.ssid ]),
+			E('div', { 'class': 'td' }, [ net.encryption || 'none' ]),
 			E('div', { 'class': 'td' }, bandsLabel(net.bands || 0)),
 			E('div', { 'class': 'td' }, net.segment
 				? E('span', { 'class': 'label' },
@@ -1927,10 +1937,10 @@ function renderController(state) {
 		])
 	]);
 
-	cbi_update_table(table, [[
+	cbi_update_table(table, common.textRows([[
 		ctrl.name || ctrl.id || _('unknown'), ctrl.addr || '-', link,
 		state.member_id || '-', counts.clients || 0
-	]]);
+	]]));
 
 	return E('div', {}, [
 		E('p', {}, _('This node is part of the Wi-Fi system managed by the controller below. The node knows about the controller and about its own clients; the rest of the system is visible on the controller.')),

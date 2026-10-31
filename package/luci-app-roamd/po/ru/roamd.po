@@ -503,6 +503,9 @@ msgstr "Сохранить"
 msgid "Save failed."
 msgstr "Не удалось сохранить."
 
+msgid "The request failed: %s"
+msgstr "Запрос не выполнен: %s"
+
 msgid "Saved."
 msgstr "Сохранено."
 

@@ -616,6 +616,9 @@ static int roamd_mesh_steer(struct ubus_context *ctx, struct ubus_object *obj,
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
+	if (!mesh.enabled)
+		return UBUS_STATUS_PERMISSION_DENIED;
+
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
@@ -634,6 +637,9 @@ static int roamd_mesh_drop(struct ubus_context *ctx, struct ubus_object *obj,
 			struct blob_attr *msg)
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
+
+	if (!mesh.enabled)
+		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])))
@@ -707,6 +713,9 @@ static int roamd_mesh_neighbors(struct ubus_context *ctx, struct ubus_object *ob
 {
 	static const struct blobmsg_policy np = { "neighbors", BLOBMSG_TYPE_ARRAY };
 	struct blob_attr *tb = NULL;
+
+	if (!mesh.enabled)
+		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(&np, 1, &tb, blob_data(msg), blob_len(msg));
 	mesh_neighbors_set(tb);
