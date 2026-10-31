@@ -1,7 +1,7 @@
 #!/bin/sh
 # shellcheck shell=dash
 
-REPO="Ground-Zerro/roamd"
+REPO="LaKardo/roamd"
 RAW="https://raw.githubusercontent.com/$REPO/main"
 FEED_BASE="https://github.com/$REPO/releases/download"
 FEED_NAME="roamd"
@@ -32,15 +32,17 @@ check_system() {
 	BRANCH="${DISTRIB_RELEASE%.*}"
 	ARCH="$DISTRIB_ARCH"
 
-	case "$BRANCH" in
-		23.05|24.10|25.12) ;;
-		*)
-			err "OpenWrt $DISTRIB_RELEASE не поддерживается (нужна ветка 23.05, 24.10 или 25.12)"
-			exit 1
-			;;
-	esac
+	[ "$BRANCH" = 25.12 ] || {
+		err "OpenWrt $DISTRIB_RELEASE не поддерживается (нужна ветка 25.12)"
+		exit 1
+	}
 
 	[ -n "$ARCH" ] || { err "Не удалось определить архитектуру устройства"; exit 1; }
+
+	[ "$ARCH" = aarch64_cortex-a53 ] || {
+		err "Архитектура $ARCH не поддерживается: пакеты собираются только для aarch64_cortex-a53. Соберите их сами, см. docs/BUILD.md"
+		exit 1
+	}
 
 	msg "Устройство: $(cat /tmp/sysinfo/model 2>/dev/null || echo '?')"
 	msg "OpenWrt $DISTRIB_RELEASE, архитектура $ARCH"

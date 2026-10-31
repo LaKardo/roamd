@@ -1393,6 +1393,8 @@ enum {
 	APPLY_NETWORKS,
 	APPLY_SYSTEM,
 	APPLY_CREDS,
+	APPLY_TXPOWER,
+	APPLY_COUNTRY,
 	__APPLY_MAX
 };
 
@@ -1405,7 +1407,103 @@ static const struct blobmsg_policy apply_policy[__APPLY_MAX] = {
 	[APPLY_NETWORKS] = { .name = "networks", .type = BLOBMSG_TYPE_ARRAY },
 	[APPLY_SYSTEM] = { .name = "system", .type = BLOBMSG_TYPE_TABLE },
 	[APPLY_CREDS] = { .name = "credentials", .type = BLOBMSG_TYPE_TABLE },
+	[APPLY_TXPOWER] = { .name = "txpower", .type = BLOBMSG_TYPE_TABLE },
+	[APPLY_COUNTRY] = { .name = "country", .type = BLOBMSG_TYPE_STRING },
 };
+
+enum { TXP_24, TXP_5, TXP_CH24, TXP_CH5, TXP_W24, TXP_W5, __TXP_MAX };
+
+static const struct blobmsg_policy txpower_policy[__TXP_MAX] = {
+	[TXP_24] = { .name = "txpower_24", .type = BLOBMSG_TYPE_INT32 },
+	[TXP_5] = { .name = "txpower_5", .type = BLOBMSG_TYPE_INT32 },
+	[TXP_CH24] = { .name = "channel_24", .type = BLOBMSG_TYPE_INT32 },
+	[TXP_CH5] = { .name = "channel_5", .type = BLOBMSG_TYPE_INT32 },
+	[TXP_W24] = { .name = "width_24", .type = BLOBMSG_TYPE_INT32 },
+	[TXP_W5] = { .name = "width_5", .type = BLOBMSG_TYPE_INT32 },
+};
+
+static const char *node_uplink_band(void);
+
+/*
+ * The profile is the same for every node; pick our own entry. Values applied
+ * earlier are remembered in roamd.mesh so that a later 0 can clear them. The
+ * channel of a band that carries our wireless uplink is set by the parent.
+ */
+static bool apply_txpower(struct uci_session *u, struct blob_attr *table)
+{
+	struct blob_attr *mine = NULL, *cur, *tb[__TXP_MAX];
+	int tx[BAND_MAX] = { 0, 0 }, ch[BAND_MAX] = { 0, 0 }, w[BAND_MAX] = { 0, 0 };
+	int prev_tx[BAND_MAX], prev_ch[BAND_MAX];
+	const char *uplink;
+	uint8_t keep = 0;
+	char value[12];
+	unsigned int k;
+	bool changed;
+	int rem;
+
+	if (!table || !mesh.member_id[0])
+		return false;
+
+	blobmsg_for_each_attr(cur, table, rem)
+		if (blobmsg_type(cur) == BLOBMSG_TYPE_TABLE && !strcmp(blobmsg_name(cur), mesh.member_id))
+			mine = cur;
+
+	if (!mine)
+		return false;
+
+	blobmsg_parse(txpower_policy, __TXP_MAX, tb, blobmsg_data(mine), blobmsg_data_len(mine));
+
+	for (k = 0; k < __MESH_RADIO_MAX; k++) {
+		int *slot = mesh_radio_slot(tx, ch, w, k);
+
+		if (tb[k])
+			*slot = (int)blobmsg_get_u32(tb[k]);
+		if (!mesh_radio_value_ok(k, *slot))
+			*slot = 0;
+	}
+
+	memcpy(prev_tx, mesh.txpower, sizeof(prev_tx));
+	memcpy(prev_ch, mesh.channel, sizeof(prev_ch));
+
+	for (k = 0; k < __MESH_RADIO_MAX; k++) {
+		snprintf(value, sizeof(value), "%d", *mesh_radio_slot(tx, ch, w, k));
+		uci_session_set(u, "mesh", mesh_radio_opts[k], value);
+	}
+
+	uplink = node_uplink_band();
+	if (!strcmp(uplink, "2.4"))
+		keep = MESH_BAND_24;
+	else if (!strcmp(uplink, "5"))
+		keep = MESH_BAND_5;
+
+	changed = mesh_txpower_apply(tx, prev_tx);
+
+	return mesh_channel_apply(ch, w, prev_ch, keep) || changed;
+}
+
+/* The region is the same for the whole system; roamd.mesh.country remembers what we wrote. */
+static bool apply_country(struct uci_session *u, struct blob_attr *attr)
+{
+	char prev[sizeof(mesh.country)];
+	const char *want;
+
+	if (!attr)
+		return false;
+
+	want = blobmsg_get_string(attr);
+	if (!mesh_country_valid(want)) {
+		roam_log(ROAM_L_ERR, "mesh: profile region rejected");
+		return false;
+	}
+
+	snprintf(prev, sizeof(prev), "%s", mesh.country);
+	if (want[0])
+		uci_session_set(u, "mesh", "country", want);
+	else
+		uci_session_delete(u, "mesh", "country");
+
+	return mesh_country_apply(want, prev);
+}
 
 enum { SYS_TIMEZONE, SYS_ZONENAME, __SYS_MAX };
 
@@ -1823,6 +1921,7 @@ bool mesh_node_apply(struct blob_attr *msg)
 	struct blob_attr *tb[__APPLY_MAX];
 	struct uci_session u;
 	const char *from;
+	bool txpower_changed, country_changed;
 
 	blobmsg_parse(apply_policy, __APPLY_MAX, tb, blob_data(msg), blob_len(msg));
 
@@ -1842,10 +1941,12 @@ bool mesh_node_apply(struct blob_attr *msg)
 	apply_table(&u, "policy", tb[APPLY_POLICY], mesh_policy_opts);
 	apply_table(&u, "mesh", tb[APPLY_BACKHAUL], mesh_backhaul_opts);
 	apply_devices(&u, tb[APPLY_DEVICES]);
+	txpower_changed = apply_txpower(&u, tb[APPLY_TXPOWER]);
+	country_changed = apply_country(&u, tb[APPLY_COUNTRY]);
 
 	uci_session_close(&u);
 
-	if (mesh_networks_apply(tb[APPLY_NETWORKS]))
+	if (mesh_networks_apply(tb[APPLY_NETWORKS]) || txpower_changed || country_changed)
 		roam_network_reload();
 
 	apply_system(tb[APPLY_SYSTEM]);
@@ -2147,22 +2248,33 @@ void mesh_node_diag(struct blob_buf *b)
 		 "logread 2>/dev/null | grep -iE 'hostapd|dropbear|roamd|netifd|wpad|udhcpc' | tail -n 90");
 }
 
-bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *neighbors)
+bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *neighbors,
+		     const char **reason)
 {
 	static struct blob_buf sb;
 	struct ether_addr *ea = ether_aton(macstr);
 	struct roam_sta *sta;
 
+	*reason = "not connected here";
+
 	if (!ea)
 		return false;
 
 	sta = roam_sta_get(ea->ether_addr_octet, false);
-	if (!sta || !sta->bss || !roam_policy_can_steer(sta))
+	if (!sta || !sta->bss)
 		return false;
 
+	if (!roam_policy_can_steer(sta)) {
+		*reason = sta->steer_count >= config.steer_retries ?
+			  "steer attempts used up" : "steered moments ago";
+		return false;
+	}
+
 	if (!sta->btm) {
-		if (!config.allow_kick)
+		if (!config.allow_kick) {
+			*reason = "no 802.11v, disconnecting is off";
 			return false;
+		}
 
 		roam_log(ROAM_L_INFO,
 			 "mesh: controller moves %s to %s, no 802.11v — disconnecting",
@@ -2244,13 +2356,16 @@ void mesh_self_info(struct blob_buf *b)
 	if (!sysinfo(&si))
 		blobmsg_add_u32(b, "uptime", si.uptime);
 
-	if (cmd_line("ip -4 -o addr show scope global 2>/dev/null | "
+	if (cmd_line("{ ip -4 -o addr show dev " MESH_BRIDGE " scope global; "
+		     "ip -4 -o addr show scope global; } 2>/dev/null | "
 		     "awk '$2 !~ /:/ { split($4, a, \"/\"); print a[1]; exit }'",
 		     value, sizeof(value)))
 		blobmsg_add_string(b, "addr", value);
 
-	if (cmd_line("cat /sys/class/net/br-lan/address 2>/dev/null", value, sizeof(value)))
+	if (cmd_line("cat /sys/class/net/" MESH_BRIDGE "/address 2>/dev/null", value, sizeof(value)))
 		blobmsg_add_string(b, "mac", value);
+
+	mesh_radios_dump(b, "radios");
 }
 
 void mesh_node_report(struct blob_buf *b)
@@ -2365,5 +2480,6 @@ void mesh_node_report(struct blob_buf *b)
 
 	node_profile(b);
 	mesh_aps_dump(b, "aps");
+	mesh_radios_dump(b, "radios");
 	mesh_log_dump(b, MESH_REPORT_EVENTS);
 }

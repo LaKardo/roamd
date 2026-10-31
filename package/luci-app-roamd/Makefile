@@ -4,11 +4,11 @@ LUCI_TITLE:=Wi-Fi roaming configuration
 LUCI_DEPENDS:=+luci-base +roamd
 LUCI_PKGARCH:=all
 
-PKG_VERSION:=1.3.0-r1
+PKG_VERSION:=1.3.1-r1
 PKG_PO_VERSION:=$(PKG_VERSION)
 PKG_RELEASE:=
 PKG_LICENSE:=Apache-2.0
-PKG_MAINTAINER:=Ground-Zerro
+PKG_MAINTAINER:=LaKardo
 
 define Package/luci-app-roamd/postinst
 #!/bin/sh

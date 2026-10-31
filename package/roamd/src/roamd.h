@@ -25,6 +25,16 @@
 #define ROAMD_NO_SIGNAL		0
 #define ROAMD_MAX_NEIGHBORS	8
 
+/* RM Enabled Capabilities, octet 0 (IEEE 802.11 9.4.2.45) */
+#define RRM_BEACON_PASSIVE	0x10
+#define RRM_BEACON_ACTIVE	0x20
+#define RRM_BEACON_TABLE	0x40
+
+/* Beacon Request measurement mode */
+#define BEACON_MODE_PASSIVE	0
+#define BEACON_MODE_ACTIVE	1
+#define BEACON_MODE_TABLE	2
+
 #define PAIR_NOT_MANAGED	0x0001
 #define PAIR_NO_PEER		0x0002
 #define PAIR_DISABLED		0x0004
@@ -169,6 +179,7 @@ struct roam_sta {
 	uint8_t dialog_token;
 	bool btm;
 	bool rrm;
+	uint8_t rrm_modes;
 };
 
 extern struct roam_config config;

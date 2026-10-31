@@ -169,16 +169,21 @@ static bool client_ext_capa_btm(struct blob_attr *client)
 	return false;
 }
 
-static bool client_rrm_beacon(struct blob_attr *client)
+static bool client_rrm_beacon(struct blob_attr *client, uint8_t *modes)
 {
 	static const struct blobmsg_policy policy = { "rrm", BLOBMSG_TYPE_ARRAY };
 	struct blob_attr *list = NULL;
+
+	*modes = 0;
 
 	blobmsg_parse(&policy, 1, &list, blobmsg_data(client), blobmsg_data_len(client));
 	if (!list || !blobmsg_data_len(list))
 		return false;
 
-	return !!(blobmsg_get_u32(blobmsg_data(list)) & 0x70);
+	*modes = blobmsg_get_u32(blobmsg_data(list)) &
+		 (RRM_BEACON_PASSIVE | RRM_BEACON_ACTIVE | RRM_BEACON_TABLE);
+
+	return !!*modes;
 }
 
 static void client_update(struct roam_bss *bss, struct blob_attr *client, const char *mac)
@@ -215,7 +220,7 @@ static void client_update(struct roam_bss *bss, struct blob_attr *client, const 
 		signal = (int32_t)blobmsg_get_u32(tb[CL_SIGNAL]);
 
 	sta->btm = client_ext_capa_btm(client);
-	sta->rrm = client_rrm_beacon(client);
+	sta->rrm = client_rrm_beacon(client, &sta->rrm_modes);
 	sta->band[bss->band].ht = tb[CL_HT] && blobmsg_get_u8(tb[CL_HT]);
 
 	roam_sta_set_connected(sta, bss, signal);

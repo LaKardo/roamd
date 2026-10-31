@@ -608,5 +608,35 @@ void mesh_profile_build(struct blob_buf *b)
 	}
 	blobmsg_close_table(b, t);
 
+	t = blobmsg_open_table(b, "txpower");
+	{
+		struct mesh_member *m;
+
+		list_for_each_entry(m, &mesh_members, list) {
+			void *mt;
+
+			if (!m->id[0])
+				continue;
+
+			mt = blobmsg_open_table(b, m->id);
+			blobmsg_add_u32(b, "txpower_24", (uint32_t)(m->txpower[BAND_LOW] > 0 ? m->txpower[BAND_LOW] : 0));
+			blobmsg_add_u32(b, "txpower_5", (uint32_t)(m->txpower[BAND_HIGH] > 0 ? m->txpower[BAND_HIGH] : 0));
+			{
+				unsigned int k;
+
+				for (k = MESH_RADIO_CH24; k < __MESH_RADIO_MAX; k++) {
+					int v = *mesh_radio_slot(m->txpower, m->channel, m->width, k);
+
+					blobmsg_add_u32(b, mesh_radio_opts[k],
+							(uint32_t)(mesh_radio_value_ok(k, v) ? v : 0));
+				}
+			}
+			blobmsg_close_table(b, mt);
+		}
+	}
+	blobmsg_close_table(b, t);
+
+	blobmsg_add_string(b, "country", mesh.country);
+
 	devices_dump(b);
 }

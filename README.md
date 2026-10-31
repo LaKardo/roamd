@@ -41,11 +41,12 @@
 
 ## Быстрый старт
 
-Нужен OpenWrt ветки 23.05, 24.10 или 25.12 и два радиоинтерфейса разных диапазонов.
+Нужен OpenWrt 25.12 на архитектуре aarch64_cortex-a53 (готовые пакеты собираются только для
+неё, например mediatek/filogic) и два радиоинтерфейса разных диапазонов.
 На роутере:
 
 ```sh
-wget -O - https://raw.githubusercontent.com/Ground-Zerro/roamd/main/install.sh | sh
+wget -O - https://raw.githubusercontent.com/LaKardo/roamd/main/install.sh | sh
 ```
 
 Скрипт определит ветку и архитектуру, подключит подписанный репозиторий roamd и
@@ -110,10 +111,11 @@ Nodes are linked by cable or over a hidden wireless backhaul. One binary covers 
 
 ## Quick start
 
-You need OpenWrt 23.05, 24.10 or 25.12 and two radios on different bands. On the router:
+You need OpenWrt 25.12 on aarch64_cortex-a53 (prebuilt packages exist only for it, e.g.
+mediatek/filogic) and two radios on different bands. On the router:
 
 ```sh
-wget -O - https://raw.githubusercontent.com/Ground-Zerro/roamd/main/install.sh | sh
+wget -O - https://raw.githubusercontent.com/LaKardo/roamd/main/install.sh | sh
 ```
 
 The script detects the branch and the architecture, connects the signed roamd repository and

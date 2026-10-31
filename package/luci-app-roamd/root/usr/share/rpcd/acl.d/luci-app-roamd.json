@@ -4,7 +4,8 @@
 		"read": {
 			"ubus": {
 				"roamd": [ "status", "mesh_status", "mesh_clients", "mesh_role", "mesh_discover", "mesh_acquire_status", "mesh_log", "cardinal" ],
-				"luci-rpc": [ "getHostHints" ]
+				"luci-rpc": [ "getHostHints" ],
+				"iwinfo": [ "countrylist" ]
 			},
 			"uci": [ "roamd", "dhcp" ]
 		},

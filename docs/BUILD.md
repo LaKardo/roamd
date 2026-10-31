@@ -1,6 +1,6 @@
 # Сборка и выпуск
 
-> Документация для версии **roamd 1.3.0-r1** (веб-интерфейс **luci-app-roamd 1.3.0-r1**).
+> Документация для версии **roamd 1.3.1-r1** (веб-интерфейс **luci-app-roamd 1.3.1-r1**).
 >
 > Проект передан [freenetic](https://github.com/unisequence/freenetic) — дальнейшее
 > развитие идёт в его рамках.
@@ -36,9 +36,9 @@ apt-get install build-essential gawk gettext git libncurses-dev libssl-dev \
 ## build.sh
 
 ```sh
-./build.sh                                   # все архитектуры ветки по умолчанию (24.10)
-RELEASE=25.12 ./build.sh aarch64_cortex-a53  # одна архитектура другой ветки
-RELEASE=23.05.6 ./build.sh mipsel_24kc       # точная версия SDK
+./build.sh                                   # все архитектуры ветки по умолчанию (25.12)
+RELEASE=25.12 ./build.sh aarch64_cortex-a53  # одна архитектура
+RELEASE=25.12.5 ./build.sh aarch64_cortex-a53  # точная версия SDK
 ./build.sh --list                            # архитектуры текущей ветки
 JOBS=8 ./build.sh                            # параллельность
 ```
@@ -72,8 +72,7 @@ cp -al build/feeds-cache-24.10.6 build/feeds-cache-24.10.8
 | `targets/branches.txt` | `<ветка> <версия SDK>` | поддерживаемые ветки и точка, чьим SDK они собираются |
 | `targets/<ветка>.txt` | `<архитектура> <цель>/<подцель>` | архитектуры пакетов ветки и цель SDK, из которой каждая собирается |
 
-Поддерживаются ветки **23.05, 24.10, 25.12** и все архитектуры пакетов, которые в них есть:
-31, 34 и 33 соответственно — 98 сборок.
+Собирается одна пара: ветка **25.12**, архитектура **aarch64_cortex-a53** (SDK `mediatek/filogic`).
 
 Собирается **одна сборка на пару «ветка × архитектура»**. Внутри ветки ABI библиотек, от которых
 зависит `roamd`, не меняется, и пакет, собранный SDK одной точки, ставится на любую точку этой
@@ -119,8 +118,8 @@ make package/roamd/compile package/luci-app-roamd/compile -j$(nproc)
 
 | Файл | Строка |
 |---|---|
-| `package/roamd/Makefile` | `PKG_VERSION:=1.3.0-r1` |
-| `package/luci-app-roamd/Makefile` | `PKG_VERSION:=1.3.0-r1`, `PKG_PO_VERSION:=$(PKG_VERSION)` |
+| `package/roamd/Makefile` | `PKG_VERSION:=1.3.1-r1` |
+| `package/luci-app-roamd/Makefile` | `PKG_VERSION:=1.3.1-r1`, `PKG_PO_VERSION:=$(PKG_VERSION)` |
 
 * Пакеты нумеруются независимо: изменился демон — поднимается версия `roamd`,
   изменился интерфейс — `luci-app-roamd`.
@@ -143,16 +142,13 @@ GitHub не даёт каталогов внутри релиза, а `opkg` и 
 `feed-<ветка>-<архитектура>`, и его адрес — адрес репозитория:
 
 ```
-https://github.com/Ground-Zerro/roamd/releases/download/feed-24.10-mipsel_24kc
-        └─ Packages, Packages.gz, Packages.sig, roamd_*.ipk, luci-app-roamd_*.ipk, …
-
-https://github.com/Ground-Zerro/roamd/releases/download/feed-25.12-aarch64_cortex-a53
+https://github.com/LaKardo/roamd/releases/download/feed-25.12-aarch64_cortex-a53
         └─ packages.adb, roamd-*.apk, luci-app-roamd-*.apk, …
 ```
 
 Эти релизы перезаписываются при каждом выпуске, тег не меняется — адрес у пользователей остаётся
 прежним. Рядом создаётся версионный релиз `v<версия>` со всеми пакетами сразу; имена файлов
-начинаются с ветки и архитектуры (`25.12-x86_64-roamd-1.3.0-r1.apk`).
+начинаются с ветки и архитектуры (`25.12-aarch64_cortex-a53-roamd-1.3.1-r1.apk`).
 
 При публикации устаревшие пакеты удаляются: в релизе фида — **после** загрузки нового индекса
 (пока он не загружен, роутеры читают старый, и его пакеты должны быть на месте), в версионном
@@ -160,8 +156,9 @@ https://github.com/Ground-Zerro/roamd/releases/download/feed-25.12-aarch64_corte
 
 ### Подпись
 
-Проверка подписи в OpenWrt включена по умолчанию. Индекс подписывается `usign` для веток 23.05
-и 24.10 и ключом RSA для 25.12. Публичные ключи лежат в `keys/`, оттуда их берёт `install.sh`.
+Проверка подписи в OpenWrt включена по умолчанию. Индекс 25.12 (`packages.adb`) подписывается
+ключом RSA, индекс `opkg` для собственных сборок старых веток — `usign`. Публичные ключи лежат в
+`keys/`, оттуда их берёт `install.sh`.
 
 Ключи для своего форка:
 
@@ -180,7 +177,7 @@ openssl rsa -in roamd.pem -pubout -out keys/roamd-apk.rsa.pub
 
 `.github/workflows/release.yml` запускается по тегу `v*` или вручную (можно указать ветки через
 пробел). Версия выпуска берётся из тега, при ручном запуске — из строки `version` в самом
-workflow (`1.3.0-r1`); она должна совпадать с `PKG_VERSION`, иначе пакеты уйдут в чужой
+workflow (`1.3.1-r1`); она должна совпадать с `PKG_VERSION`, иначе пакеты уйдут в чужой
 версионный релиз.
 
 | Задача | Действие |

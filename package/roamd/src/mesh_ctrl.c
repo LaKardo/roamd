@@ -576,10 +576,27 @@ void mesh_member_live(const char *id, struct blob_buf *b)
 	blobmsg_add_u8(b, "online", 0);
 }
 
-bool mesh_member_set(const char *id, const char *name, const char *nodes)
+static void radio_option(struct uci_session *u, const char *section, unsigned int k,
+			 const char *value)
+{
+	int v = atoi(value);
+
+	if (v > 0 && mesh_radio_value_ok(k, v)) {
+		char buf[12];
+
+		snprintf(buf, sizeof(buf), "%d", v);
+		uci_session_set(u, section, mesh_radio_opts[k], buf);
+	} else {
+		uci_session_delete(u, section, mesh_radio_opts[k]);
+	}
+}
+
+bool mesh_member_set(const char *id, const char *name, const char *nodes,
+		     struct blob_attr **radio)
 {
 	struct uci_session u;
 	struct uci_section *sec;
+	unsigned int k;
 
 	if (!uci_session_open(&u, "roamd"))
 		return false;
@@ -599,6 +616,10 @@ bool mesh_member_set(const char *id, const char *name, const char *nodes)
 			uci_session_add_list(&u, sec->e.name, "bh_node", tok);
 	}
 
+	for (k = 0; sec && k < __MESH_RADIO_MAX; k++)
+		if (radio[k])
+			radio_option(&u, sec->e.name, k, blobmsg_get_string(radio[k]));
+
 	uci_session_close(&u);
 
 	if (sec) {
@@ -607,6 +628,56 @@ bool mesh_member_set(const char *id, const char *name, const char *nodes)
 	}
 
 	return sec != NULL;
+}
+
+void mesh_ctrl_txpower_apply(void)
+{
+	static int applied[BAND_MAX];
+	static bool known;
+
+	if (mesh.role != MESH_CONTROLLER)
+		return;
+
+	if (mesh_txpower_apply(mesh.txpower, known ? applied : mesh.txpower))
+		roam_network_reload();
+
+	memcpy(applied, mesh.txpower, sizeof(applied));
+	known = true;
+}
+
+/*
+ * Nodes get the region, channels and widths with the profile; the controller
+ * follows once they have answered (poll_finish), so that a wireless backhaul
+ * is not cut from the controller side while the nodes still use the old ones.
+ */
+void mesh_ctrl_radio_apply(bool nodes_done)
+{
+	static char applied[sizeof(mesh.country)];
+	static int ch_applied[BAND_MAX], w_applied[BAND_MAX];
+	static bool known;
+	bool changed;
+
+	if (mesh.role != MESH_CONTROLLER)
+		return;
+
+	if (known && !strcmp(applied, mesh.country) &&
+	    !memcmp(ch_applied, mesh.channel, sizeof(ch_applied)) &&
+	    !memcmp(w_applied, mesh.width, sizeof(w_applied)))
+		return;
+
+	if (!nodes_done && !list_empty(&mesh_members))
+		return;
+
+	changed = mesh_country_apply(mesh.country, known ? applied : mesh.country);
+	changed = mesh_channel_apply(mesh.channel, mesh.width, known ? ch_applied : mesh.channel, 0) ||
+		  changed;
+	if (changed)
+		roam_network_reload();
+
+	snprintf(applied, sizeof(applied), "%s", mesh.country);
+	memcpy(ch_applied, mesh.channel, sizeof(ch_applied));
+	memcpy(w_applied, mesh.width, sizeof(w_applied));
+	known = true;
 }
 
 static void member_lease_drop(const char *id)

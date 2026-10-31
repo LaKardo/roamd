@@ -72,6 +72,13 @@ static bool busy;
 static bool force_pending;
 static bool force_apply;
 static char *profile_json;
+static char poll_radio[64];
+
+static void radio_sig(char *out, size_t len)
+{
+	snprintf(out, len, "%s/%d/%d/%d/%d", mesh.country, mesh.channel[BAND_LOW],
+		 mesh.channel[BAND_HIGH], mesh.width[BAND_LOW], mesh.width[BAND_HIGH]);
+}
 static char profile_sum[MESH_NET_SUM_LEN];
 static void poll_watchdog_cb(struct uloop_timeout *t);
 static void cardinal_push(void);
@@ -488,6 +495,13 @@ static void poll_finish(void)
 	ft_kh_refresh();
 	steer_round();
 	cardinal_push();
+	{
+		char now[sizeof(poll_radio)];
+
+		radio_sig(now, sizeof(now));
+		if (!strcmp(poll_radio, now))
+			mesh_ctrl_radio_apply(true);
+	}
 	busy = false;
 }
 
@@ -667,6 +681,7 @@ void mesh_poll_run(bool force)
 	if (profile_build())
 		force = true;
 
+	radio_sig(poll_radio, sizeof(poll_radio));
 	force_apply = force;
 
 	for (i = 0; i < n_nodes; i++) {
@@ -827,6 +842,25 @@ static void ghosts_drop(unsigned int from, unsigned int to)
 	}
 }
 
+#define PEER_JSON_MAX	12000
+
+static void peer_clients_add(struct blob_buf *b, unsigned int self)
+{
+	unsigned int k;
+	void *arr;
+
+	arr = blobmsg_open_array(b, "clients");
+
+	for (k = 0; k < n_refs && blob_len(b->head) < PEER_JSON_MAX; k++) {
+		const struct poll_sta *s = ref_sta(&refs[k]);
+
+		if (refs[k].node != self && s->client && s->connected)
+			blobmsg_add_string(b, NULL, s->mac);
+	}
+
+	blobmsg_close_array(b, arr);
+}
+
 static void neighbors_push(void)
 {
 	static struct blob_buf b;
@@ -834,35 +868,41 @@ static void neighbors_push(void)
 	char *json;
 	void *arr;
 
-	blob_buf_init(&b, 0);
-	arr = blobmsg_open_array(&b, "neighbors");
+	for (i = 0; i < n_nodes; i++) {
+		if (!nodes[i].online)
+			continue;
 
-	for (i = 0; i < n_nodes; i++)
-		for (j = 0; j < nodes[i].n_ap; j++) {
-			const struct poll_ap *a = &nodes[i].ap[j];
-			void *t;
+		blob_buf_init(&b, 0);
+		arr = blobmsg_open_array(&b, "neighbors");
 
-			if (!a->nr[0])
-				continue;
+		for (j = 0; j < n_nodes; j++) {
+			unsigned int a;
 
-			t = blobmsg_open_table(&b, NULL);
-			blobmsg_add_string(&b, "bssid", a->bssid);
-			blobmsg_add_string(&b, "ssid", a->ssid);
-			blobmsg_add_string(&b, "nr", a->nr);
-			blobmsg_close_table(&b, t);
+			for (a = 0; a < nodes[j].n_ap; a++) {
+				const struct poll_ap *ap = &nodes[j].ap[a];
+				void *t;
+
+				if (!ap->nr[0])
+					continue;
+
+				t = blobmsg_open_table(&b, NULL);
+				blobmsg_add_string(&b, "bssid", ap->bssid);
+				blobmsg_add_string(&b, "ssid", ap->ssid);
+				blobmsg_add_string(&b, "nr", ap->nr);
+				blobmsg_close_table(&b, t);
+			}
 		}
 
-	blobmsg_close_array(&b, arr);
+		blobmsg_close_array(&b, arr);
+		peer_clients_add(&b, i);
 
-	json = blobmsg_format_json(b.head, true);
-	if (!json)
-		return;
+		json = blobmsg_format_json(b.head, true);
+		if (!json)
+			continue;
 
-	for (i = 0; i < n_nodes; i++)
-		if (nodes[i].online)
-			member_call(&nodes[i], "mesh_neighbors", json);
-
-	free(json);
+		member_call(&nodes[i], "mesh_neighbors", json);
+		free(json);
+	}
 }
 
 static void cardinal_push(void)
@@ -912,6 +952,126 @@ static unsigned int neighbor_list(const struct poll_node *best, const uint8_t *a
 	return count;
 }
 
+#define STEER_MEMO_MAX		64
+#define STEER_REFUSED_HOLD	1800000
+
+/*
+ * What the controller last asked of each client, so that it does not repeat
+ * the same move every poll. A sent request waits age_time for the client to
+ * leave; a refusal (the node used up its attempts or cannot steer this
+ * client) waits until the client reconnects or moves.
+ */
+struct steer_memo {
+	uint8_t addr[6];
+	char home[MESH_ID_MAX];
+	char target[MESH_ID_MAX];
+	uint8_t band;
+	uint32_t connected;
+	uint64_t at;
+	bool refused;
+};
+
+struct steer_call {
+	uint8_t addr[6];
+	char home[MESH_ID_MAX];
+};
+
+static struct steer_memo steer_memo[STEER_MEMO_MAX];
+
+static struct steer_memo *steer_memo_find(const uint8_t *addr)
+{
+	unsigned int i;
+
+	for (i = 0; i < STEER_MEMO_MAX; i++)
+		if (steer_memo[i].at && !memcmp(steer_memo[i].addr, addr, 6))
+			return &steer_memo[i];
+
+	return NULL;
+}
+
+static bool steer_memo_holds(const struct poll_sta *c, const char *home, const char *target)
+{
+	struct steer_memo *m = steer_memo_find(c->addr);
+	uint64_t hold;
+
+	if (!m)
+		return false;
+
+	hold = m->refused ? STEER_REFUSED_HOLD : config.age_time;
+
+	if (strcmp(m->home, home) || strcmp(m->target, target) || m->band != c->band ||
+	    c->connected < m->connected || roam_now - m->at >= hold) {
+		m->at = 0;
+		return false;
+	}
+
+	return true;
+}
+
+static struct steer_memo *steer_memo_put(const struct poll_sta *c, const char *home,
+					 const char *target)
+{
+	struct steer_memo *m = steer_memo_find(c->addr);
+	unsigned int i;
+
+	if (!m) {
+		m = &steer_memo[0];
+		for (i = 1; i < STEER_MEMO_MAX && m->at; i++)
+			if (steer_memo[i].at < m->at)
+				m = &steer_memo[i];
+	}
+
+	memcpy(m->addr, c->addr, 6);
+	snprintf(m->home, sizeof(m->home), "%s", home);
+	snprintf(m->target, sizeof(m->target), "%s", target);
+	m->band = c->band;
+	m->connected = c->connected;
+	m->at = roam_now ? roam_now : 1;
+	m->refused = false;
+
+	return m;
+}
+
+static void steer_memo_result(struct steer_memo *m, bool sent, const char *reason)
+{
+	char mac[MESH_MAC_MAX];
+
+	if (sent || !m->at)
+		return;
+
+	m->refused = true;
+
+	roam_mac_str(m->addr, mac, sizeof(mac));
+	roam_log(ROAM_L_INFO, "mesh: %s did not move %s to %s (%s), not asking again for now",
+		 m->home, mac, m->target, reason ? reason : "no answer");
+}
+
+static void steer_call_cb(void *priv, struct blob_attr *result, bool ok)
+{
+	static const struct blobmsg_policy rp[2] = {
+		{ "sent", BLOBMSG_TYPE_BOOL },
+		{ "reason", BLOBMSG_TYPE_STRING },
+	};
+	struct steer_call *sc = priv;
+	struct steer_memo *m = steer_memo_find(sc->addr);
+	struct blob_attr *tb[2] = { NULL, NULL };
+
+	if (m && !strcmp(m->home, sc->home)) {
+		if (ok && result)
+			blobmsg_parse(rp, 2, tb, blobmsg_data(result), blobmsg_data_len(result));
+
+		/* Nodes before 1.3.1 answer with an empty table on success. */
+		if (ok && !tb[0])
+			steer_memo_result(m, true, NULL);
+		else
+			steer_memo_result(m, tb[0] && blobmsg_get_bool(tb[0]),
+					  tb[1] ? blobmsg_get_string(tb[1]) :
+					  ok ? NULL : "refused or unreachable");
+	}
+
+	free(sc);
+}
+
 static void steer_client(unsigned int from, unsigned int to, unsigned int client)
 {
 	const struct poll_sta *c = ref_sta(&refs[client]);
@@ -922,6 +1082,7 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 	const struct poll_node *best = NULL;
 	int best_signal = 0, home_signal = 0;
 	char args[1024], list[768];
+	struct steer_memo *memo;
 
 	if (!net_roaming(ssid))
 		return;
@@ -950,6 +1111,9 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 	    best_signal - home_signal < config.node_rssi_diff)
 		return;
 
+	if (steer_memo_holds(c, nodes[home].id, best->id))
+		return;
+
 	list[0] = 0;
 	if (!neighbor_list(best, c->addr, ssid, band, list, sizeof(list)))
 		neighbor_list(best, c->addr, ssid, 0, list, sizeof(list));
@@ -965,7 +1129,38 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 		 mac, best->id, roam_band_name(rb), best_signal,
 		 nodes[home].id, home_signal);
 
-	member_call(&nodes[home], "mesh_steer", args);
+	memo = steer_memo_put(c, nodes[home].id, best->id);
+
+	if (!strcmp(nodes[home].id, SELF_ID)) {
+		static struct blob_buf sb;
+		const char *reason = NULL;
+		bool sent = false;
+
+		blob_buf_init(&sb, 0);
+		if (blobmsg_add_json_from_string(&sb, args)) {
+			struct blob_attr *tb[1];
+			static const struct blobmsg_policy np = { "neighbors", BLOBMSG_TYPE_ARRAY };
+
+			blobmsg_parse(&np, 1, tb, blob_data(sb.head), blob_len(sb.head));
+			sent = mesh_node_steer(mac, best->id, tb[0], &reason);
+		}
+
+		steer_memo_result(memo, sent, reason);
+		return;
+	}
+
+	{
+		struct steer_call *sc = calloc(1, sizeof(*sc));
+
+		if (sc) {
+			memcpy(sc->addr, c->addr, 6);
+			snprintf(sc->home, sizeof(sc->home), "%s", nodes[home].id);
+		}
+
+		if (!mesh_rpc_call(nodes[home].id, nodes[home].addr, "roamd", "mesh_steer", args,
+				   sc ? steer_call_cb : NULL, sc))
+			free(sc);
+	}
 }
 
 static void steer_round(void)

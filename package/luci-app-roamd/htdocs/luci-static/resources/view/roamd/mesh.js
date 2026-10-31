@@ -92,7 +92,8 @@ var callMeshSelfUpdate = rpc.declare({
 var callMeshMemberUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_member_update',
-	params: [ 'id', 'name', 'nodes' ],
+	params: [ 'id', 'name', 'nodes', 'txpower_24', 'txpower_5',
+		'channel_24', 'channel_5', 'width_24', 'width_5' ],
 	expect: { },
 	reject: true
 });
@@ -102,9 +103,16 @@ var callMeshSettings = rpc.declare({
 	method: 'mesh_settings',
 	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'node_ui',
 		'backhaul_delta', 'backhaul_min_signal', 'auto_update', 'auto_update_every',
-		'auto_update_unit', 'pkg_url' ],
+		'auto_update_unit', 'pkg_url', 'country' ],
 	expect: { },
 	reject: true
+});
+
+var callCountryList = rpc.declare({
+	object: 'iwinfo',
+	method: 'countrylist',
+	params: [ 'device' ],
+	expect: { results: [] }
 });
 
 var callMeshNetworkUpdate = rpc.declare({
@@ -118,10 +126,236 @@ var callMeshNetworkUpdate = rpc.declare({
 var callMeshControllerName = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_settings',
-	params: [ 'controller_name' ],
+	params: [ 'controller_name', 'txpower_24', 'txpower_5',
+		'channel_24', 'channel_5', 'width_24', 'width_5' ],
 	expect: { },
 	reject: true
 });
+
+/* radios[] of a report: current and maximum power per band */
+function radioOf(radios, band) {
+	var list = (radios || []).filter(function(r) { return r.band === band && !r.disabled; });
+
+	return list.length ? list[0] : null;
+}
+
+function txpowerRows(radios, values, inputs) {
+	return [ '2.4', '5' ].map(function(band) {
+		var r = radioOf(radios, band);
+		var key = band === '5' ? 'txpower_5' : 'txpower_24';
+		var max = r && r.txpower_max ? r.txpower_max : 30;
+		var input = E('input', {
+			'type': 'number', 'class': 'cbi-input-text', 'style': 'width:6em',
+			'min': 0, 'max': max, 'step': 1,
+			'value': values[key] ? String(values[key]) : '',
+			'placeholder': _('auto'),
+			'disabled': readOnly || !r ? 'disabled' : null
+		});
+		var now = r && r.txpower !== undefined
+			? _('now %d dBm, maximum %d dBm').format(r.txpower, max)
+			: (r ? _('maximum %d dBm').format(max) : _('no radio on this band'));
+
+		inputs[key] = input;
+
+		return E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title' }, _('Transmit power %s GHz').format(band)),
+			E('div', { 'class': 'cbi-value-field' }, [
+				input, ' ', E('span', {}, _('dBm')),
+				E('div', { 'class': 'cbi-value-description' }, now)
+			])
+		]);
+	});
+}
+
+/*
+ * Problems with the channel a radio actually uses, judged by the channel
+ * list the radio reports for its current region.
+ */
+function radioIssues(radios) {
+	var out = [];
+
+	(radios || []).forEach(function(r) {
+		if (r.disabled)
+			return;
+
+		var band = r.band === '5' ? '5' : '2.4';
+
+		if (r.up === false) {
+			out.push(_('%s GHz radio is down: the channel may be forbidden in region %s').format(band, r.country || '—'));
+			return;
+		}
+
+		var ch = (r.freqlist || []).filter(function(f) { return f.channel === r.channel; })[0];
+
+		if (r.channel && r.freqlist && !ch)
+			out.push(_('%s GHz: channel %d is not allowed in region %s').format(band, r.channel, r.country || '—'));
+	});
+
+	return out;
+}
+
+function radioIssueRows(radios) {
+	return radioIssues(radios).map(function(t) {
+		return E('div', { 'class': 'alert-message warning', 'style': 'margin:.3em 0' }, t);
+	});
+}
+
+function txpowerValue(input) {
+	var n = parseInt(input.value, 10);
+
+	if (isNaN(n) || n < 0)
+		n = 0;
+	if (input.max && n > parseInt(input.max, 10))
+		n = parseInt(input.max, 10);
+
+	return String(n);
+}
+
+function channelDfs(ch) {
+	return (ch >= 52 && ch <= 64) || (ch >= 100 && ch <= 144);
+}
+
+/* channels a block of this width occupies, placed the way OpenWrt does it */
+function channelBlock(band, ch, width) {
+	if (width === 20)
+		return [ ch ];
+
+	if (band === '2.4')
+		return width === 40 ? [ ch, ch < 7 ? ch + 4 : ch - 4 ] : null;
+
+	var n = width / 20, base = ch >= 149 ? 149 : 36;
+	var first = base + Math.floor((ch - base) / (4 * n)) * 4 * n, out = [];
+
+	for (var i = 0; i < n; i++)
+		out.push(first + 4 * i);
+
+	return out;
+}
+
+/* the whole block must be allowed, not DFS and not restricted by the region */
+function channelFits(r, ch, width) {
+	var block = channelBlock(r.band, ch, width);
+	var byCh = {};
+
+	(r.freqlist || []).forEach(function(f) { byCh[f.channel] = f; });
+
+	if (!block)
+		return false;
+
+	return block.every(function(c) {
+		return byCh[c] && !byCh[c].dfs && !channelDfs(c);
+	});
+}
+
+function radioWidths(r) {
+	var all = r.band === '5' ? [ 20, 40, 80, 160 ] : [ 20, 40 ];
+	var modes = r.htmodes || [];
+
+	return all.filter(function(w) {
+		return !modes.length || modes.some(function(m) { return m.replace(/^[A-Z]+/, '') === String(w); });
+	});
+}
+
+/*
+ * Channel and width per band. bhBand: the band of the node's wireless uplink,
+ * whose channel follows the parent and cannot be set here.
+ */
+function channelRows(radios, values, inputs, bhBand) {
+	return [ '2.4', '5' ].map(function(band) {
+		var r = radioOf(radios, band);
+		var suffix = band === '5' ? '_5' : '_24';
+		var follow = bhBand === band;
+		var widthSel = E('select', { 'class': 'cbi-input-select', 'disabled': readOnly || !r ? 'disabled' : null });
+		var chanSel = E('select', {
+			'class': 'cbi-input-select', 'style': 'margin-right:.5em',
+			'disabled': readOnly || !r || follow ? 'disabled' : null
+		});
+		var want = values['channel' + suffix] || 0;
+		var wantW = values['width' + suffix] || 0;
+
+		widthSel.appendChild(E('option', { 'value': '' }, _('as configured')));
+		(r ? radioWidths(r) : []).forEach(function(w) {
+			widthSel.appendChild(E('option', { 'value': w, 'selected': w === wantW ? 'selected' : null },
+				_('%d MHz').format(w)));
+		});
+
+		function fillChannels() {
+			var w = parseInt(widthSel.value, 10) || (r && r.width) || 20;
+			var cur = parseInt(chanSel.value, 10) || want;
+
+			chanSel.innerHTML = '';
+			chanSel.appendChild(E('option', { 'value': '' }, _('auto')));
+			(r ? r.freqlist || [] : []).forEach(function(f) {
+				if (!channelFits(r, f.channel, w))
+					return;
+				chanSel.appendChild(E('option', {
+					'value': f.channel, 'selected': f.channel === cur ? 'selected' : null
+				}, String(f.channel)));
+			});
+			if (cur && !chanSel.querySelector('option[value="' + cur + '"]'))
+				chanSel.appendChild(E('option', { 'value': cur, 'selected': 'selected' },
+					_('%d (not allowed at this width)').format(cur)));
+		}
+
+		widthSel.addEventListener('change', fillChannels);
+		fillChannels();
+
+		inputs['channel' + suffix] = chanSel;
+		inputs['width' + suffix] = widthSel;
+
+		var now = [];
+
+		if (!r)
+			now.push(_('no radio on this band'));
+		else if (r.channel) {
+			now.push(_('now channel %d, %d MHz').format(r.channel, r.width_actual || r.width || 20));
+			if (r.width_actual && r.width && r.width_actual < r.width)
+				now.push(_('narrowed from %d MHz: the neighbouring channels are not usable').format(r.width));
+		}
+		if (follow)
+			now.push(_('set by the parent: this band carries the wireless backhaul'));
+
+		return E('div', { 'class': 'cbi-value' }, [
+			E('label', { 'class': 'cbi-value-title' }, _('Channel %s GHz').format(band)),
+			E('div', { 'class': 'cbi-value-field' }, [
+				chanSel, widthSel,
+				E('div', { 'class': 'cbi-value-description' }, now.join('; '))
+			])
+		]);
+	});
+}
+
+function channelValues(inputs) {
+	var out = {};
+
+	[ 'channel_24', 'channel_5', 'width_24', 'width_5' ].forEach(function(k) {
+		out[k] = inputs[k] && !inputs[k].disabled ? (inputs[k].value || '0') : undefined;
+	});
+
+	return out;
+}
+
+function channelChanged(inputs, values) {
+	return [ 'channel_24', 'channel_5', 'width_24', 'width_5' ].some(function(k) {
+		return inputs[k] && !inputs[k].disabled && String(parseInt(inputs[k].value, 10) || 0) !== String(values[k] || 0);
+	});
+}
+
+/* run apply() after warning that the radios restart */
+function confirmChannels(inputs, values, apply) {
+	if (!channelChanged(inputs, values))
+		return apply();
+
+	ui.showModal(_('Change the channel'), [
+		E('p', {}, _('The radios whose channel or width changes restart; their clients lose the connection for a few seconds.')),
+		E('div', { 'class': 'right' }, [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
+			' ',
+			E('button', { 'class': 'btn cbi-button-positive', 'click': function() { ui.hideModal(); apply(); } },
+				_('Change'))
+		])
+	]);
+}
 
 var EVENT_TYPE = {
 	connect: _('connected'),
@@ -670,7 +904,203 @@ function renderNodes(state) {
 
 	cbi_update_table(table, common.textRows(rows), E('em', {}, _('No nodes yet')));
 
-	return E('div', {}, [ deps, running, intro, E('div', {}, addButton), E('br'), table ]);
+	return E('div', {}, [ deps, running, intro,
+		E('div', {}, [ addButton, ' ', readOnly ? '' : E('button', {
+			'class': 'btn cbi-button',
+			'click': function() { autoChannelDialog(state); },
+			'disabled': busy ? 'disabled' : null
+		}, _('Pick channels')) ]),
+		E('br'), table ]);
+}
+
+/* fixed channel plans: wide blocks first, as far apart as the band allows */
+function channelLayout(band, width, has13) {
+	if (band === '2.4')
+		return width === 40 ? (has13 ? [ 1, 13 ] : [ 1 ]) : (has13 ? [ 1, 5, 9, 13 ] : [ 1, 6, 11 ]);
+
+	if (width === 80)
+		return [ 36, 149 ];
+	if (width === 40)
+		return [ 36, 44, 149, 157 ];
+	if (width === 20)
+		return [ 36, 44, 149, 157, 40, 48, 153, 161 ];
+
+	return [];
+}
+
+function blocksOverlap(band, a, wa, b, wb) {
+	if (band === '2.4') {
+		var sa = channelBlock(band, a, wa), sb = channelBlock(band, b, wb);
+		var lo = function(s) { return Math.min.apply(null, s) - 2; };
+		var hi = function(s) { return Math.max.apply(null, s) + 2; };
+
+		return lo(sa) < hi(sb) && lo(sb) < hi(sa);
+	}
+
+	var ca = channelBlock(band, a, wa), cb = channelBlock(band, b, wb);
+
+	return ca.some(function(c) { return cb.indexOf(c) >= 0; });
+}
+
+/*
+ * Plan per band: the controller first, then the nodes, wider radios before
+ * narrower ones. Each radio takes the allowed block shared with the fewest
+ * radios already placed. A band used by any wireless backhaul is left out:
+ * its channel is set by the parent.
+ */
+function channelPlan(state) {
+	var aps = [ { id: null, name: controllerLabel(state), radios: (state.self || {}).radios } ];
+	var plan = [], notes = [];
+
+	(state.members || []).forEach(function(m) {
+		if (m.online && m.radios)
+			aps.push({ id: m.id, name: m.name || m.id, radios: m.radios, member: m });
+	});
+
+	[ '2.4', '5' ].forEach(function(band) {
+		var bh = (state.members || []).some(function(m) {
+			return m.online && m.connection === 'wifi' && m.uplink_band === band;
+		});
+
+		if (bh) {
+			notes.push(_('%s GHz is left out: it carries the wireless backhaul').format(band));
+			return;
+		}
+
+		var list = [];
+
+		aps.forEach(function(ap, idx) {
+			var r = radioOf(ap.radios, band);
+
+			if (r && r.up !== false)
+				list.push({ ap: ap, r: r, idx: idx, width: r.width || 20 });
+		});
+
+		list.sort(function(a, b) { return (b.width - a.width) || (a.idx - b.idx); });
+
+		var placed = [], reused = false;
+
+		list.forEach(function(e) {
+			var has13 = (e.r.freqlist || []).some(function(f) { return f.channel === 13; });
+			var widths = radioWidths(e.r).filter(function(w) { return w <= e.width; }).sort(function(a, b) { return b - a; });
+			var width = e.width, cands = [];
+
+			/* 160 MHz always touches DFS: step down until a block fits */
+			for (var i = 0; i < widths.length && !cands.length; i++) {
+				width = widths[i];
+				cands = channelLayout(band, width, has13).filter(function(c) {
+					return channelFits(e.r, c, width);
+				});
+			}
+
+			if (!cands.length) {
+				notes.push(_('%s, %s GHz: no allowed channel, left as is').format(e.ap.name, band));
+				return;
+			}
+
+			if (width < e.width)
+				notes.push(_('%s, %s GHz: %d MHz needs DFS channels, %d MHz is proposed instead').format(e.ap.name, band, e.width, width));
+
+			var best = null, bestScore = Infinity;
+
+			cands.forEach(function(c) {
+				var score = placed.filter(function(p) {
+					return blocksOverlap(band, c, width, p.channel, p.width);
+				}).length;
+
+				if (score < bestScore) {
+					best = c;
+					bestScore = score;
+				}
+			});
+
+			if (bestScore > 0)
+				reused = true;
+
+			placed.push({ channel: best, width: width });
+			plan.push({ ap: e.ap, band: band, r: e.r, width: width, channel: best });
+		});
+
+		if (reused)
+			notes.push(_('%s GHz: more access points than free channels, some share a channel').format(band));
+	});
+
+	return { plan: plan, notes: notes };
+}
+
+function autoChannelDialog(state) {
+	var res = channelPlan(state);
+	function same(p) {
+		return p.r.channel === p.channel && (p.r.width || 20) === p.width;
+	}
+
+	var rows = res.plan.map(function(p) {
+		var was = p.r.channel ? '%d / %d %s'.format(p.r.channel, p.r.width_actual || p.r.width || 20, _('MHz')) : '—';
+		var will = '%d / %d %s'.format(p.channel, p.width, _('MHz'));
+
+		return [ p.ap.name, '%s %s'.format(p.band, _('GHz')), was,
+			same(p) ? E('em', {}, _('no change')) : E('strong', {}, will) ];
+	});
+	var changes = res.plan.filter(function(p) { return !same(p); });
+	var table = E('table', { 'class': 'table' }, [
+		E('tr', { 'class': 'tr table-titles' }, [
+			E('th', { 'class': 'th' }, _('Access point')),
+			E('th', { 'class': 'th' }, _('Band')),
+			E('th', { 'class': 'th' }, _('Was')),
+			E('th', { 'class': 'th' }, _('Will be'))
+		])
+	]);
+
+	cbi_update_table(table, common.textRows(rows), E('em', {}, _('Nothing to plan')));
+
+	function apply() {
+		var byAp = {};
+
+		changes.forEach(function(p) {
+			var key = p.ap.id || '';
+			var sfx = p.band === '5' ? '_5' : '_24';
+
+			byAp[key] = byAp[key] || { ap: p.ap, v: {} };
+			byAp[key].v['channel' + sfx] = String(p.channel);
+			byAp[key].v['width' + sfx] = String(p.width);
+		});
+
+		var keys = Object.keys(byAp).sort(function(a, b) { return (a === '') - (b === ''); });
+		var chain = Promise.resolve();
+
+		ui.hideModal();
+		keys.forEach(function(k) {
+			var v = byAp[k].v;
+
+			chain = chain.then(function() {
+				return k === ''
+					? callMeshControllerName(undefined, undefined, undefined,
+						v.channel_24, v.channel_5, v.width_24, v.width_5)
+					: callMeshMemberUpdate(k, undefined, undefined, undefined, undefined,
+						v.channel_24, v.channel_5, v.width_24, v.width_5);
+			});
+		});
+		chain.then(refreshNodes, common.rpcError);
+	}
+
+	ui.showModal(_('Pick channels'), [
+		E('p', {}, _('Proposed channels so that neighbouring access points do not overlap. Nothing changes until you press Apply.')),
+		table,
+		E('div', {}, res.notes.map(function(n) {
+			return E('div', { 'class': 'alert-message warning', 'style': 'margin:.3em 0' }, n);
+		})),
+		changes.length ? E('p', { 'class': 'cbi-value-description' },
+			_('The radios whose channel changes restart; their clients lose the connection for a few seconds. The nodes switch first, the controller last.')) : '',
+		E('div', { 'class': 'right' }, [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
+			' ',
+			E('button', {
+				'class': 'btn cbi-button-positive',
+				'disabled': changes.length ? null : 'disabled',
+				'click': apply
+			}, _('Apply'))
+		])
+	]);
 }
 
 function connectionCell(m) {
@@ -724,9 +1154,21 @@ function controllerDialog(state) {
 	if (state.deps_state)
 		info.push(infoRow(_('Preparation'), state.deps_state));
 
+	var txInputs = {};
+	var txRows = txpowerRows(self.radios, { txpower_24: state.txpower_24, txpower_5: state.txpower_5 }, txInputs);
+	var chInputs = {};
+	var chRows = channelRows(self.radios, state, chInputs, null);
+
 	function save() {
 		ui.hideModal();
-		callMeshControllerName(nameInput.value).then(refreshNodes, common.rpcError);
+		confirmChannels(chInputs, state, function() {
+			var c = channelValues(chInputs);
+
+			callMeshControllerName(nameInput.value,
+				txpowerValue(txInputs.txpower_24), txpowerValue(txInputs.txpower_5),
+				c.channel_24, c.channel_5, c.width_24, c.width_5)
+				.then(refreshNodes, common.rpcError);
+		});
 	}
 
 	var actions = readOnly || state.auto_update ? [] : [
@@ -750,6 +1192,12 @@ function controllerDialog(state) {
 			E('label', { 'class': 'cbi-value-title' }, _('Controller name')),
 			E('div', { 'class': 'cbi-value-field' }, nameInput)
 		]),
+		E('h4', {}, _('Radio')),
+		E('p', { 'class': 'cbi-value-description' },
+			_('Roaming works best when the access points are about equally loud. Empty or 0 leaves the hardware default.')),
+		E('div', {}, radioIssueRows(self.radios)),
+		E('div', {}, txRows),
+		E('div', {}, chRows),
 		E('h4', {}, _('Details')),
 		E('div', {}, info),
 		common.dialogFooter(actions, buttons)
@@ -1324,9 +1772,21 @@ function nodeDialog(m, state, refresh) {
 	if (m.seg_issue)
 		info.push(infoRow(_('Segment'), m.seg_issue));
 
+	var txInputs = {};
+	var txRows = txpowerRows(m.radios, { txpower_24: m.txpower_24, txpower_5: m.txpower_5 }, txInputs);
+	var chInputs = {};
+	var chRows = channelRows(m.radios, m, chInputs, m.connection === 'wifi' ? m.uplink_band : null);
+
 	function save() {
 		ui.hideModal();
-		callMeshMemberUpdate(m.id, nameInput.value, chips.value()).then(refresh, common.rpcError);
+		confirmChannels(chInputs, m, function() {
+			var c = channelValues(chInputs);
+
+			callMeshMemberUpdate(m.id, nameInput.value, chips.value(),
+				txpowerValue(txInputs.txpower_24), txpowerValue(txInputs.txpower_5),
+				c.channel_24, c.channel_5, c.width_24, c.width_5)
+				.then(refresh, common.rpcError);
+		});
 	}
 
 	var busy = state.acquire && state.acquire.running;
@@ -1374,6 +1834,13 @@ function nodeDialog(m, state, refresh) {
 				chips.reset();
 			}
 		}, _('Allow any device'))),
+
+		E('h4', {}, _('Radio')),
+		E('p', { 'class': 'cbi-value-description' },
+			_('Roaming works best when the access points are about equally loud. Empty or 0 leaves the hardware default.')),
+		E('div', {}, radioIssueRows(m.radios)),
+		E('div', {}, txRows),
+		E('div', {}, chRows),
 
 		E('h4', {}, _('Details')),
 		E('div', {}, info),
@@ -1676,7 +2143,8 @@ function renderSettings(state) {
 		auto_update: !!state.auto_update,
 		auto_update_every: state.auto_update_every || 1,
 		auto_update_unit: state.auto_update_unit || 'day',
-		pkg_url: state.pkg_url === state.pkg_url_default ? '' : (state.pkg_url || '')
+		pkg_url: state.pkg_url === state.pkg_url_default ? '' : (state.pkg_url || ''),
+		country: state.country || ''
 	};
 	var inputs = {};
 	var synced = {};
@@ -1823,10 +2291,58 @@ function renderSettings(state) {
 		lastRow.style.display = display;
 	}
 
+	var countryConfirmed = false;
+	var countrySelect = E('select', {
+		'class': 'cbi-input-select', 'disabled': readOnly || null,
+		'change': function(ev) { form.country = ev.target.value; }
+	}, [ E('option', { 'value': '' }, _('leave as set on each device')) ].concat(
+		(state.countries || []).filter(function(c) {
+			return /^([A-Z]{2}|00)$/.test(c.code);
+		}).map(function(c) {
+			return E('option', {
+				'value': c.code,
+				'selected': c.code === form.country ? 'selected' : null
+			}, '%s — %s'.format(c.code, c.country));
+		})));
+
+	if (form.country && !countrySelect.querySelector('option[value="' + form.country + '"]'))
+		countrySelect.appendChild(E('option', { 'value': form.country, 'selected': 'selected' }, form.country));
+
+	var countryRow = E('div', { 'class': 'cbi-value' }, [
+		E('label', { 'class': 'cbi-value-title', 'style': 'min-width:22em' }, _('Regulatory region')),
+		E('div', { 'class': 'cbi-value-field' }, [
+			countrySelect,
+			E('div', { 'class': 'cbi-value-description' },
+				_('One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty leaves the region set on each device.'))
+		])
+	]);
+
 	var save = E('button', {
 		'class': 'btn cbi-button cbi-button-save',
 		'disabled': readOnly || null,
 		'click': function() {
+			if (form.country !== (state.country || '') && !countryConfirmed) {
+				ui.showModal(_('Change the regulatory region'), [
+					E('p', {}, _('Every access point of the system will restart its radios with the new region; clients lose the connection for a few seconds.')),
+					E('p', {}, _('Channels and power allowed in one region may be forbidden in another. If the current channel is not allowed in the new region, the radio does not come up: check the node cards after saving and choose another channel.')),
+					E('p', {}, _('You are responsible for choosing the region where the equipment is actually used.')),
+					E('div', { 'class': 'right' }, [
+						E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')),
+						' ',
+						E('button', {
+							'class': 'btn cbi-button-positive',
+							'click': function() {
+								countryConfirmed = true;
+								ui.hideModal();
+								save.click();
+							}
+						}, _('Change'))
+					])
+				]);
+				return;
+			}
+
+			countryConfirmed = false;
 			status.textContent = _('Saving…');
 			callMeshSettings(
 				form.backhaul_enabled ? '1' : '0',
@@ -1836,8 +2352,9 @@ function renderSettings(state) {
 				String(form.backhaul_delta), String(form.backhaul_min_signal),
 				form.auto_update ? '1' : '0',
 				String(form.auto_update_every), form.auto_update_unit,
-				form.pkg_url
+				form.pkg_url, form.country
 			).then(function() {
+				state.country = form.country;
 				BACKHAUL_FIELDS.forEach(function(key) { synced[key] = form[key]; });
 				status.textContent = _('Saved.');
 			}, function() { status.textContent = _('Save failed.'); });
@@ -1920,6 +2437,9 @@ function renderSettings(state) {
 		text('backhaul_ssid', _('Backhaul network name')),
 		text('backhaul_key', _('Backhaul key'), null, true),
 
+		E('h3', {}, _('Radio')),
+		countryRow,
+
 		E('h3', {}, _('Node behaviour')),
 		nodeUiRow,
 		toggle('wifi_shutdown', _('Turn off node access points when the controller is unreachable'),
@@ -1974,10 +2494,18 @@ return view.extend({
 			uci.load('roamd').catch(function() { return null; })
 		]).then(function(res) {
 			var state = res[0] || {};
+			var radios = (state.self || {}).radios || [];
 
 			state.backhaul_key = uci.get('roamd', 'mesh', 'backhaul_key') || '';
 
-			return state;
+			if (common.isNode(state) || !radios.length)
+				return state;
+
+			return callCountryList(radios[0].radio).catch(function() { return []; }).then(function(list) {
+				state.countries = list || [];
+
+				return state;
+			});
 		});
 	},
 

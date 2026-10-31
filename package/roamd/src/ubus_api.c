@@ -50,6 +50,17 @@ static void status_add_clients(struct roam_bss *bss)
 		blobmsg_add_u32(&b, "connected", (roam_now - sta->connected_since) / 1000);
 		blobmsg_add_u8(&b, "btm", sta->btm);
 		blobmsg_add_u8(&b, "rrm", sta->rrm);
+		if (sta->rrm_modes) {
+			char modes[24] = "";
+
+			if (sta->rrm_modes & RRM_BEACON_ACTIVE)
+				strcat(modes, "active");
+			if (sta->rrm_modes & RRM_BEACON_PASSIVE)
+				strcat(modes, modes[0] ? ",passive" : "passive");
+			if (sta->rrm_modes & RRM_BEACON_TABLE)
+				strcat(modes, modes[0] ? ",table" : "table");
+			blobmsg_add_string(&b, "rrm_modes", modes);
+		}
 		blobmsg_add_u32(&b, "steer_count", sta->steer_count);
 		blobmsg_add_string(&b, "band_lock", lock_name(roam_device_lock(sta->addr)));
 
@@ -256,6 +267,16 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 		blobmsg_add_string(&b, "auto_update_result", mesh.auto_update_result);
 		blobmsg_add_string(&b, "pkg_url", mesh.pkg_url);
 		blobmsg_add_string(&b, "pkg_url_default", MESH_PKG_URL_DEFAULT);
+		blobmsg_add_u32(&b, "txpower_24", (uint32_t)(mesh.txpower[BAND_LOW] > 0 ? mesh.txpower[BAND_LOW] : 0));
+		blobmsg_add_u32(&b, "txpower_5", (uint32_t)(mesh.txpower[BAND_HIGH] > 0 ? mesh.txpower[BAND_HIGH] : 0));
+		blobmsg_add_string(&b, "country", mesh.country);
+		{
+			unsigned int k;
+
+			for (k = MESH_RADIO_CH24; k < __MESH_RADIO_MAX; k++)
+				blobmsg_add_u32(&b, mesh_radio_opts[k],
+						(uint32_t)*mesh_radio_slot(mesh.txpower, mesh.channel, mesh.width, k));
+		}
 		mesh_ctrl_acquire_blob(&b);
 
 		members = blobmsg_open_array(&b, "members");
@@ -269,6 +290,15 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 			blobmsg_add_string(&b, "addr", m->addr);
 			blobmsg_add_u8(&b, "managed", m->managed);
 			blobmsg_add_string(&b, "bh_nodes", m->bh_nodes);
+			blobmsg_add_u32(&b, "txpower_24", (uint32_t)(m->txpower[BAND_LOW] > 0 ? m->txpower[BAND_LOW] : 0));
+			blobmsg_add_u32(&b, "txpower_5", (uint32_t)(m->txpower[BAND_HIGH] > 0 ? m->txpower[BAND_HIGH] : 0));
+			{
+				unsigned int k;
+
+				for (k = MESH_RADIO_CH24; k < __MESH_RADIO_MAX; k++)
+					blobmsg_add_u32(&b, mesh_radio_opts[k],
+							(uint32_t)*mesh_radio_slot(m->txpower, m->channel, m->width, k));
+			}
 
 			if (m->bh_nodes[0] && !mesh_parent_reachable(m->id, m->bh_nodes))
 				blobmsg_add_u8(&b, "bh_nodes_void", 1);
@@ -300,6 +330,12 @@ enum {
 	MESH_ARG_STOP,
 	MESH_ARG_SSID,
 	MESH_ARG_ROAMING,
+	MESH_ARG_TX24,
+	MESH_ARG_TX5,
+	MESH_ARG_CH24,
+	MESH_ARG_CH5,
+	MESH_ARG_W24,
+	MESH_ARG_W5,
 	__MESH_ARG_MAX
 };
 
@@ -318,6 +354,12 @@ static const struct blobmsg_policy mesh_arg_policy[__MESH_ARG_MAX] = {
 	[MESH_ARG_STOP] = { .name = "stop", .type = BLOBMSG_TYPE_BOOL },
 	[MESH_ARG_SSID] = { .name = "ssid", .type = BLOBMSG_TYPE_STRING },
 	[MESH_ARG_ROAMING] = { .name = "roaming", .type = BLOBMSG_TYPE_STRING },
+	[MESH_ARG_TX24] = { .name = "txpower_24", .type = BLOBMSG_TYPE_STRING },
+	[MESH_ARG_TX5] = { .name = "txpower_5", .type = BLOBMSG_TYPE_STRING },
+	[MESH_ARG_CH24] = { .name = "channel_24", .type = BLOBMSG_TYPE_STRING },
+	[MESH_ARG_CH5] = { .name = "channel_5", .type = BLOBMSG_TYPE_STRING },
+	[MESH_ARG_W24] = { .name = "width_24", .type = BLOBMSG_TYPE_STRING },
+	[MESH_ARG_W5] = { .name = "width_5", .type = BLOBMSG_TYPE_STRING },
 };
 
 static int roamd_mesh_job(struct ubus_context *ctx, struct ubus_object *obj,
@@ -420,6 +462,13 @@ enum {
 	SET_AUTO_UNIT,
 	SET_PKG_URL,
 	SET_NAME,
+	SET_TX24,
+	SET_TX5,
+	SET_COUNTRY,
+	SET_CH24,
+	SET_CH5,
+	SET_W24,
+	SET_W5,
 	__SET_MAX
 };
 
@@ -436,6 +485,13 @@ static const struct blobmsg_policy settings_policy[__SET_MAX] = {
 	[SET_AUTO_UNIT] = { .name = "auto_update_unit", .type = BLOBMSG_TYPE_STRING },
 	[SET_PKG_URL] = { .name = "pkg_url", .type = BLOBMSG_TYPE_STRING },
 	[SET_NAME] = { .name = "controller_name", .type = BLOBMSG_TYPE_STRING },
+	[SET_TX24] = { .name = "txpower_24", .type = BLOBMSG_TYPE_STRING },
+	[SET_TX5] = { .name = "txpower_5", .type = BLOBMSG_TYPE_STRING },
+	[SET_COUNTRY] = { .name = "country", .type = BLOBMSG_TYPE_STRING },
+	[SET_CH24] = { .name = "channel_24", .type = BLOBMSG_TYPE_STRING },
+	[SET_CH5] = { .name = "channel_5", .type = BLOBMSG_TYPE_STRING },
+	[SET_W24] = { .name = "width_24", .type = BLOBMSG_TYPE_STRING },
+	[SET_W5] = { .name = "width_5", .type = BLOBMSG_TYPE_STRING },
 };
 
 static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj,
@@ -446,7 +502,9 @@ static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj
 		"backhaul_enabled", "backhaul_ssid", "backhaul_key",
 		"wifi_shutdown", "node_ui", "backhaul_delta", "backhaul_min_signal",
 		"auto_update", "auto_update_every",
-		"auto_update_unit", "pkg_url", "controller_name"
+		"auto_update_unit", "pkg_url", "controller_name",
+		"txpower_24", "txpower_5", "country",
+		"channel_24", "channel_5", "width_24", "width_5"
 	};
 	struct blob_attr *tb[__SET_MAX];
 	struct uci_session u;
@@ -457,19 +515,44 @@ static int roamd_mesh_settings(struct ubus_context *ctx, struct ubus_object *obj
 
 	blobmsg_parse(settings_policy, __SET_MAX, tb, blob_data(msg), blob_len(msg));
 
+	if (tb[SET_COUNTRY] && !mesh_country_valid(blobmsg_get_string(tb[SET_COUNTRY])))
+		return UBUS_STATUS_INVALID_ARGUMENT;
+
 	if (!uci_session_open(&u, "roamd"))
 		return UBUS_STATUS_UNKNOWN_ERROR;
 
 	uci_session_add(&u, "mesh", "mesh");
 
-	for (i = 0; i < __SET_MAX; i++)
-		if (tb[i])
-			uci_session_set(&u, "mesh", opts[i], blobmsg_get_string(tb[i]));
+	for (i = 0; i < __SET_MAX; i++) {
+		if (!tb[i])
+			continue;
+
+		if (i == SET_TX24 || i == SET_TX5 || (i >= SET_CH24 && i <= SET_W5)) {
+			unsigned int k = i == SET_TX24 ? MESH_RADIO_TX24 : i == SET_TX5 ? MESH_RADIO_TX5 :
+					 MESH_RADIO_CH24 + (unsigned int)(i - SET_CH24);
+			int v = atoi(blobmsg_get_string(tb[i]));
+
+			if (v > 0 && mesh_radio_value_ok(k, v))
+				uci_session_set(&u, "mesh", opts[i], blobmsg_get_string(tb[i]));
+			else
+				uci_session_delete(&u, "mesh", opts[i]);
+			continue;
+		}
+
+		if (i == SET_COUNTRY && !blobmsg_get_string(tb[i])[0]) {
+			uci_session_delete(&u, "mesh", opts[i]);
+			continue;
+		}
+
+		uci_session_set(&u, "mesh", opts[i], blobmsg_get_string(tb[i]));
+	}
 
 	uci_session_close(&u);
 
 	roam_config_load();
 	mesh_ctrl_backhaul_apply();
+	mesh_ctrl_txpower_apply();
+	mesh_ctrl_radio_apply(false);
 	mesh_ctrl_autoupdate_arm();
 	mesh_ctrl_sync();
 
@@ -491,7 +574,8 @@ static int roamd_mesh_member_update(struct ubus_context *ctx, struct ubus_object
 
 	if (!mesh_member_set(blobmsg_get_string(tb[MESH_ARG_ID]),
 			     tb[MESH_ARG_NAME] ? blobmsg_get_string(tb[MESH_ARG_NAME]) : NULL,
-			     tb[MESH_ARG_NODES] ? blobmsg_get_string(tb[MESH_ARG_NODES]) : NULL))
+			     tb[MESH_ARG_NODES] ? blobmsg_get_string(tb[MESH_ARG_NODES]) : NULL,
+			     &tb[MESH_ARG_TX24]))
 		return UBUS_STATUS_NOT_FOUND;
 
 	return 0;
@@ -615,6 +699,8 @@ static int roamd_mesh_steer(struct ubus_context *ctx, struct ubus_object *obj,
 			struct blob_attr *msg)
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
+	const char *reason = NULL;
+	bool sent;
 
 	if (!mesh.enabled)
 		return UBUS_STATUS_PERMISSION_DENIED;
@@ -624,10 +710,18 @@ static int roamd_mesh_steer(struct ubus_context *ctx, struct ubus_object *obj,
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	roam_time_update();
-	if (!mesh_node_steer(blobmsg_get_string(tb[MESH_ARG_MAC]),
-			     tb[MESH_ARG_ID] ? blobmsg_get_string(tb[MESH_ARG_ID]) : NULL,
-			     tb[MESH_ARG_NEIGHBORS]))
-		return UBUS_STATUS_NOT_FOUND;
+	sent = mesh_node_steer(blobmsg_get_string(tb[MESH_ARG_MAC]),
+			       tb[MESH_ARG_ID] ? blobmsg_get_string(tb[MESH_ARG_ID]) : NULL,
+			       tb[MESH_ARG_NEIGHBORS], &reason);
+
+	/* A refusal is an answer, not an error: an error makes the RPC client log in again. */
+	if (req) {
+		blob_buf_init(&b, 0);
+		blobmsg_add_u8(&b, "sent", sent);
+		if (!sent && reason)
+			blobmsg_add_string(&b, "reason", reason);
+		ubus_send_reply(ctx, req, b.head);
+	}
 
 	return 0;
 }
@@ -711,14 +805,18 @@ static int roamd_mesh_neighbors(struct ubus_context *ctx, struct ubus_object *ob
 			struct ubus_request_data *req, const char *method,
 			struct blob_attr *msg)
 {
-	static const struct blobmsg_policy np = { "neighbors", BLOBMSG_TYPE_ARRAY };
-	struct blob_attr *tb = NULL;
+	static const struct blobmsg_policy np[2] = {
+		{ "neighbors", BLOBMSG_TYPE_ARRAY },
+		{ "clients", BLOBMSG_TYPE_ARRAY },
+	};
+	struct blob_attr *tb[2];
 
 	if (!mesh.enabled)
 		return UBUS_STATUS_PERMISSION_DENIED;
 
-	blobmsg_parse(&np, 1, &tb, blob_data(msg), blob_len(msg));
-	mesh_neighbors_set(tb);
+	blobmsg_parse(np, 2, tb, blob_data(msg), blob_len(msg));
+	mesh_neighbors_set(tb[0]);
+	mesh_peer_clients_set(tb[1]);
 	roam_neighbors_resync();
 
 	return 0;

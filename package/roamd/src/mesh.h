@@ -22,7 +22,7 @@
 #define MESH_BH_ALLOW_LEN	(MESH_ALLOW_MAX * (MESH_ID_MAX + 1))
 #define MESH_BH_LIMITS_LEN	768
 #define MESH_IFACE_MAX		16
-#define MESH_PKG_URL_DEFAULT	"https://github.com/Ground-Zerro/roamd/releases/download/feed-%b-%a"
+#define MESH_PKG_URL_DEFAULT	"https://github.com/LaKardo/roamd/releases/download/feed-%b-%a"
 
 enum mesh_role {
 	MESH_CONTROLLER,
@@ -37,6 +37,9 @@ struct mesh_member {
 	char mac[MESH_MAC_MAX];
 	char addr[MESH_ADDR_MAX];
 	char bh_nodes[MESH_BH_ALLOW_LEN];
+	int txpower[BAND_MAX];
+	int channel[BAND_MAX];
+	int width[BAND_MAX];
 	bool managed;
 };
 
@@ -137,6 +140,10 @@ struct mesh_config {
 	uint32_t auto_update_last;
 	char auto_update_result[MESH_WORD_MAX];
 	char pkg_url[MESH_URL_MAX];
+	int txpower[BAND_MAX];
+	int channel[BAND_MAX];
+	int width[BAND_MAX];
+	char country[4];
 
 	char controller_id[MESH_ID_MAX];
 	char controller_name[MESH_NAME_MAX];
@@ -165,6 +172,35 @@ uint8_t mesh_radio_band(struct uci_context *ctx, struct uci_package *pkg, const 
 enum roam_band mesh_band_from_bit(uint8_t bit);
 bool mesh_band_usable(uint8_t bit);
 void mesh_aps_dump(struct blob_buf *b, const char *name);
+void mesh_radios_dump(struct blob_buf *b, const char *name);
+bool mesh_txpower_apply(const int *want, const int *prev);
+#define MESH_TXPOWER_MAX	40
+bool mesh_country_valid(const char *c);
+bool mesh_country_apply(const char *want, const char *prev);
+bool mesh_channel_dfs(int channel);
+bool mesh_channel_apply(const int *channel, const int *width, const int *prev_channel,
+			uint8_t keep_channel_band);
+
+/* per-band radio options of roamd.mesh and roamd.member, in this order */
+enum {
+	MESH_RADIO_TX24,
+	MESH_RADIO_TX5,
+	MESH_RADIO_CH24,
+	MESH_RADIO_CH5,
+	MESH_RADIO_W24,
+	MESH_RADIO_W5,
+	__MESH_RADIO_MAX
+};
+
+extern const char *const mesh_radio_opts[__MESH_RADIO_MAX];
+bool mesh_radio_value_ok(unsigned int opt, int v);
+
+static inline int *mesh_radio_slot(int *tx, int *ch, int *w, unsigned int k)
+{
+	int *base = k < MESH_RADIO_CH24 ? tx : k < MESH_RADIO_W24 ? ch : w;
+
+	return &base[(k & 1) ? BAND_HIGH : BAND_LOW];
+}
 
 unsigned int mesh_networks_collect(void);
 const struct mesh_network *mesh_network_at(unsigned int i);
@@ -413,6 +449,8 @@ bool mesh_client_set(const char *mac, const char *band, const char *alias, const
 
 void mesh_neighbors_set(struct blob_attr *arr);
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max);
+void mesh_peer_clients_set(struct blob_attr *arr);
+bool mesh_peer_client(const uint8_t *addr);
 
 enum mesh_job_kind {
 	MESH_JOB_DISCOVER,
@@ -432,16 +470,20 @@ void mesh_ctrl_autoupdate_arm(void);
 void mesh_ctrl_sync(void);
 void mesh_ctrl_ensure_id(void);
 void mesh_ctrl_backhaul_apply(void);
+void mesh_ctrl_txpower_apply(void);
+void mesh_ctrl_radio_apply(bool nodes_done);
 void mesh_ctrl_bridge_stp(void);
 void mesh_member_live(const char *id, struct blob_buf *b);
 bool mesh_member_remove(const char *id);
-bool mesh_member_set(const char *id, const char *name, const char *nodes);
+bool mesh_member_set(const char *id, const char *name, const char *nodes,
+		     struct blob_attr **radio);
 
 bool mesh_node_apply(struct blob_attr *msg);
 void mesh_node_report(struct blob_buf *b);
 void mesh_self_info(struct blob_buf *b);
 void mesh_node_diag(struct blob_buf *b);
-bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *neighbors);
+bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *neighbors,
+		     const char **reason);
 bool mesh_node_drop(const char *macstr);
 void mesh_node_touch(void);
 uint32_t mesh_node_contact_age(void);

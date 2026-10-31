@@ -1,16 +1,18 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.3.0-r1
+PKG_VERSION:=1.3.1-r1
 PKG_RELEASE:=
 
 PKG_LICENSE:=Apache-2.0
-PKG_MAINTAINER:=Ground-Zerro
+PKG_MAINTAINER:=LaKardo
 
 PKG_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
 include $(INCLUDE_DIR)/cmake.mk
+
+CMAKE_OPTIONS += -DROAMD_VERSION=$(PKG_VERSION)
 
 define Package/roamd
   SECTION:=net
@@ -20,7 +22,7 @@ define Package/roamd
   DEPENDS:=+libubox +libubus +libuci +libblobmsg-json +libuclient +ca-bundle
   CONFLICTS:=usteer dawn
   EXTRA_DEPENDS:=$(if $(CONFIG_USE_APK),!usteer (>=0)$(comma) !dawn (>=0))
-  URL:=https://github.com/Ground-Zerro/roamd
+  URL:=https://github.com/LaKardo/roamd
 endef
 
 define Package/roamd/description

@@ -11,8 +11,38 @@
 #define KICK_REASON		5
 #define STEER_RETRY_INTERVAL	5000
 #define BEACON_REQ_PER_POLL	4
+#define INSIST_LOG_INTERVAL	1800000
+#define INSIST_LOG_SLOTS	32
 
 static struct blob_buf b;
+
+/* Probe-only stations are forgotten after age_time, so remember log times apart. */
+static bool insist_log_due(const uint8_t *addr)
+{
+	static struct {
+		uint8_t addr[6];
+		uint64_t at;
+	} slot[INSIST_LOG_SLOTS];
+	unsigned int i, oldest = 0;
+
+	for (i = 0; i < INSIST_LOG_SLOTS; i++) {
+		if (!memcmp(slot[i].addr, addr, 6) && slot[i].at) {
+			if (roam_now - slot[i].at < INSIST_LOG_INTERVAL)
+				return false;
+
+			slot[i].at = roam_now;
+			return true;
+		}
+
+		if (slot[i].at < slot[oldest].at)
+			oldest = i;
+	}
+
+	memcpy(slot[oldest].addr, addr, 6);
+	slot[oldest].at = roam_now;
+
+	return true;
+}
 
 static enum roam_band preferred_band(void)
 {
@@ -90,6 +120,9 @@ bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_eve
 	if (cur->signal != ROAMD_NO_SIGNAL && cur->signal - pref->signal >= config.rssi_diff)
 		goto allow;
 
+	if (ev == EVENT_PROBE && mesh_peer_client(sta->addr))
+		return false;
+
 	if (!cur->deny_start)
 		cur->deny_start = roam_now;
 
@@ -99,8 +132,9 @@ bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_eve
 	cur->deny_start = 0;
 	cur->allow_until = roam_now + config.age_time;
 
-	roam_log(ROAM_L_INFO, "roamd: %s insists on %s GHz, giving up",
-		 sta->mac, roam_band_name(bss->band));
+	if (insist_log_due(sta->addr))
+		roam_log(ROAM_L_INFO, "roamd: %s insists on %s GHz, giving up",
+			 sta->mac, roam_band_name(bss->band));
 
 	return true;
 
@@ -109,10 +143,38 @@ allow:
 	return true;
 }
 
+/*
+ * hostapd refuses a beacon request in a mode the client did not advertise;
+ * many Apple and Intel clients offer passive and table only. A passive scan
+ * waits for a beacon, hence the longer duration.
+ */
+static bool beacon_req_mode(const struct roam_sta *sta, uint32_t *mode, uint32_t *duration)
+{
+	if (sta->rrm_modes & RRM_BEACON_ACTIVE) {
+		*mode = BEACON_MODE_ACTIVE;
+		*duration = 50;
+	} else if (sta->rrm_modes & RRM_BEACON_PASSIVE) {
+		*mode = BEACON_MODE_PASSIVE;
+		*duration = 120;
+	} else if (sta->rrm_modes & RRM_BEACON_TABLE) {
+		*mode = BEACON_MODE_TABLE;
+		*duration = 0;
+	} else {
+		return false;
+	}
+
+	return true;
+}
+
 static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to,
 				  unsigned int *budget)
 {
+	uint32_t mode, duration;
+
 	if (!sta->rrm || !config.neighbor_reports || !to->op_class)
+		return;
+
+	if (!beacon_req_mode(sta, &mode, &duration))
 		return;
 
 	if (sta->beacon_req_silent >= config.steer_retries)
@@ -132,8 +194,8 @@ static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, s
 	blob_buf_init(&b, 0);
 	blobmsg_add_string(&b, "addr", sta->mac);
 	blobmsg_add_string(&b, "ssid", to->ssid);
-	blobmsg_add_u32(&b, "mode", 1);
-	blobmsg_add_u32(&b, "duration", 50);
+	blobmsg_add_u32(&b, "mode", mode);
+	blobmsg_add_u32(&b, "duration", duration);
 	blobmsg_add_u32(&b, "channel", to->channel);
 	blobmsg_add_u32(&b, "op_class", to->op_class);
 	roam_bss_invoke(from, "rrm_beacon_req", &b);

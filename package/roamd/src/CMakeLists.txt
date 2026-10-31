@@ -44,4 +44,8 @@ set(SOURCES
 add_executable(roamd ${SOURCES})
 target_link_libraries(roamd ubox ubus uci blobmsg_json uclient)
 
+if(ROAMD_VERSION)
+	target_compile_definitions(roamd PRIVATE ROAMD_VERSION="${ROAMD_VERSION}")
+endif()
+
 install(TARGETS roamd RUNTIME DESTINATION sbin)

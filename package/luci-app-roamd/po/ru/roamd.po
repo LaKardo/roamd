@@ -1270,6 +1270,27 @@ msgstr "Ни одно из разрешённых устройств этому 
 msgid "Allow any device"
 msgstr "Разрешить любое устройство"
 
+msgid "Radio"
+msgstr "Радио"
+
+msgid "Roaming works best when the access points are about equally loud. Empty or 0 leaves the hardware default."
+msgstr "Роуминг работает лучше, когда точки доступа примерно одинаково «громкие». Пусто или 0 — оставить значение по умолчанию."
+
+msgid "Transmit power %s GHz"
+msgstr "Мощность %s ГГц"
+
+msgid "now %d dBm, maximum %d dBm"
+msgstr "сейчас %d дБм, максимум %d дБм"
+
+msgid "maximum %d dBm"
+msgstr "максимум %d дБм"
+
+msgid "no radio on this band"
+msgstr "нет радио в этом диапазоне"
+
+msgid "auto"
+msgstr "авто"
+
 msgid "Remove node"
 msgstr "Удалить узел"
 
@@ -1349,3 +1370,99 @@ msgstr "Поправка оценки диапазона"
 
 msgid "When the preferred band has no fresh measurement, its signal is estimated from the other band with this offset in dB."
 msgstr "Если свежего замера в предпочитаемом диапазоне нет, сигнал там оценивается по другому диапазону с этой поправкой в дБ."
+
+msgid "%s GHz radio is down: the channel may be forbidden in region %s"
+msgstr "Радио %s ГГц не работает: возможно, канал запрещён в регионе %s"
+
+msgid "%s GHz: channel %d is not allowed in region %s"
+msgstr "%s ГГц: канал %d недопустим в регионе %s"
+
+msgid "Change the regulatory region"
+msgstr "Смена региона"
+
+msgid "Every access point of the system will restart its radios with the new region; clients lose the connection for a few seconds."
+msgstr "Все точки доступа системы перезапустят радио с новым регионом; клиенты потеряют связь на несколько секунд."
+
+msgid "Channels and power allowed in one region may be forbidden in another. If the current channel is not allowed in the new region, the radio does not come up: check the node cards after saving and choose another channel."
+msgstr "Каналы и мощность, разрешённые в одном регионе, могут быть запрещены в другом. Если текущий канал недопустим в новом регионе, радио не поднимется: после сохранения проверьте карточки узлов и выберите другой канал."
+
+msgid "You are responsible for choosing the region where the equipment is actually used."
+msgstr "Вы отвечаете за выбор региона, в котором оборудование действительно используется."
+
+msgid "Change"
+msgstr "Изменить"
+
+msgid "leave as set on each device"
+msgstr "как задано на каждом устройстве"
+
+msgid "Regulatory region"
+msgstr "Регион"
+
+msgid "One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty leaves the region set on each device."
+msgstr "Один регион для контроллера и всех узлов. От него зависят доступные каналы и допустимая мощность. Сначала переключаются узлы, контроллер — последним. Пусто — регион, заданный на каждом устройстве, не меняется."
+
+msgid "as configured"
+msgstr "как настроено"
+
+msgid "%d MHz"
+msgstr "%d МГц"
+
+msgid "%d (not allowed at this width)"
+msgstr "%d (недопустим при этой ширине)"
+
+msgid "now channel %d, %d MHz"
+msgstr "сейчас канал %d, %d МГц"
+
+msgid "narrowed from %d MHz: the neighbouring channels are not usable"
+msgstr "сужено с %d МГц: соседние каналы недоступны"
+
+msgid "set by the parent: this band carries the wireless backhaul"
+msgstr "задаётся родителем: по этому диапазону идёт беспроводная транспортная сеть"
+
+msgid "Channel %s GHz"
+msgstr "Канал %s ГГц"
+
+msgid "Change the channel"
+msgstr "Смена канала"
+
+msgid "The radios whose channel or width changes restart; their clients lose the connection for a few seconds."
+msgstr "Радио, у которых меняется канал или ширина, перезапустятся; их клиенты потеряют связь на несколько секунд."
+
+msgid "Pick channels"
+msgstr "Подобрать каналы"
+
+msgid "%s GHz is left out: it carries the wireless backhaul"
+msgstr "%s ГГц пропущен: по нему идёт беспроводная транспортная сеть"
+
+msgid "%s, %s GHz: no allowed channel, left as is"
+msgstr "%s, %s ГГц: нет допустимого канала, оставлено как есть"
+
+msgid "%s, %s GHz: %d MHz needs DFS channels, %d MHz is proposed instead"
+msgstr "%s, %s ГГц: для %d МГц нужны DFS-каналы, вместо этого предложено %d МГц"
+
+msgid "%s GHz: more access points than free channels, some share a channel"
+msgstr "%s ГГц: точек доступа больше, чем свободных каналов, часть из них делит канал"
+
+msgid "Access point"
+msgstr "Точка доступа"
+
+msgid "Was"
+msgstr "Было"
+
+msgid "Will be"
+msgstr "Станет"
+
+msgid "no change"
+msgstr "без изменений"
+
+msgid "Nothing to plan"
+msgstr "Нечего планировать"
+
+msgid "Proposed channels so that neighbouring access points do not overlap. Nothing changes until you press Apply."
+msgstr "Предлагаемые каналы, чтобы соседние точки доступа не перекрывались. Ничего не меняется, пока вы не нажмёте «Применить»."
+
+msgid "The radios whose channel changes restart; their clients lose the connection for a few seconds. The nodes switch first, the controller last."
+msgstr "Радио, у которых меняется канал, перезапустятся; их клиенты потеряют связь на несколько секунд. Сначала переключаются узлы, контроллер — последним."
+
+msgid "Apply"
+msgstr "Применить"

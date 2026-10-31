@@ -1,7 +1,7 @@
 #!/bin/sh
 set -u
 
-RELEASE="${RELEASE:-24.10}"
+RELEASE="${RELEASE:-25.12}"
 JOBS="${JOBS:-$(nproc)}"
 
 ROOT=$(cd "$(dirname "$0")" && pwd)
