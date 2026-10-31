@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,7 @@ const char *const mesh_pkg_names[MESH_PKG_COUNT] = {
 #define PKG_INDEX_MAX	1048576
 #define PKG_CACHE_TTL	300000
 #define PKG_REDIRECT_MAX	5
+#define PKG_PREFIX_HTTPS	1
 
 struct pkg_fetch {
 	struct uloop_timeout finish;
@@ -65,11 +67,28 @@ static bool pkg_url(char *out, size_t len)
 	return true;
 }
 
+bool mesh_pkg_word_valid(const char *s)
+{
+	size_t i;
+
+	if (!s || !s[0] || s[0] == '.' || strlen(s) >= MESH_ARCH_MAX)
+		return false;
+
+	for (i = 0; s[i]; i++)
+		if (!isalnum((unsigned char)s[i]) && !strchr("._-", s[i]))
+			return false;
+
+	return true;
+}
+
 bool mesh_pkg_feed_url(const char *branch, const char *arch, char *out, size_t len)
 {
 	char tmpl[MESH_URL_MAX];
 	const char *p;
 	size_t used = 0;
+
+	if (!mesh_pkg_word_valid(branch) || !mesh_pkg_word_valid(arch))
+		return false;
 
 	if (!pkg_url(tmpl, sizeof(tmpl)))
 		return false;
@@ -145,6 +164,9 @@ static void finish_cb(struct uloop_timeout *t)
 
 static void fetch_done(struct pkg_fetch *f, bool ok)
 {
+	if (f->finish.pending)
+		return;
+
 	f->ok = ok;
 	uloop_timeout_set(&f->finish, 0);
 }
@@ -184,8 +206,15 @@ static void header_done_cb(struct uclient *cl)
 	if (f->redirects >= PKG_REDIRECT_MAX)
 		return;
 
-	if (uclient_http_redirect(cl))
+	if (uclient_http_redirect(cl)) {
 		f->redirects++;
+
+		if (!cl->url || cl->url->prefix != PKG_PREFIX_HTTPS) {
+			roam_log(ROAM_L_ERR, "mesh: repository redirect to a non-https address refused");
+			uclient_disconnect(cl);
+			fetch_done(f, false);
+		}
+	}
 }
 
 static void eof_cb(struct uclient *cl)
@@ -244,6 +273,12 @@ bool mesh_pkg_get(const char *url, const char *path, mesh_pkg_cb cb, void *priv)
 
 	if (fetch_add_ca(f, PKG_CERT))
 		verify = true;
+
+	if (!verify) {
+		roam_log(ROAM_L_ERR, "mesh: no CA certificates (%s), repository access refused",
+			 SYS_CERTS);
+		goto fail;
+	}
 
 	f->cl = uclient_new(url, NULL, &fetch_cb);
 	if (!f->cl)
@@ -314,6 +349,28 @@ static struct pkg_cache *cache_take(const char *branch, const char *arch, const 
 	return victim;
 }
 
+bool mesh_pkg_meta_valid(const struct mesh_pkg_meta *m)
+{
+	size_t i;
+
+	if (!m->file[0] || m->file[0] == '.' || strlen(m->sum) != 64)
+		return false;
+
+	for (i = 0; m->file[i]; i++)
+		if (!isalnum((unsigned char)m->file[i]) && !strchr("._+-~", m->file[i]))
+			return false;
+
+	for (i = 0; m->sum[i]; i++)
+		if (!isxdigit((unsigned char)m->sum[i]))
+			return false;
+
+	for (i = 0; m->version[i]; i++)
+		if (!isalnum((unsigned char)m->version[i]) && !strchr("._+-~", m->version[i]))
+			return false;
+
+	return true;
+}
+
 static bool opkg_meta(const char *index, const char *name, struct mesh_pkg_meta *out)
 {
 	const char *line = index;
@@ -346,7 +403,7 @@ static bool opkg_meta(const char *index, const char *name, struct mesh_pkg_meta 
 		line = end ? end + 1 : NULL;
 	}
 
-	return out->file[0] && out->sum[0];
+	return out->file[0] && out->sum[0] && mesh_pkg_meta_valid(out);
 }
 
 struct index_job {
@@ -391,7 +448,8 @@ static void adb_ready(void *priv, bool ok, char *data, size_t len)
 	}
 
 	if (ok)
-		ok = apk_index_meta(path, job->name, &job->slot->meta);
+		ok = apk_index_meta(path, job->name, &job->slot->meta) &&
+		     mesh_pkg_meta_valid(&job->slot->meta);
 
 	unlink(path);
 	index_done(job, ok);
@@ -499,7 +557,8 @@ bool mesh_pkg_path(const char *branch, const char *arch, const char *name,
 {
 	struct mesh_pkg_meta meta;
 
-	if (!mesh_pkg_known(branch, arch, name, &meta))
+	if (!mesh_pkg_word_valid(branch) || !mesh_pkg_word_valid(arch) ||
+	    !mesh_pkg_known(branch, arch, name, &meta))
 		return false;
 
 	snprintf(out, len, PKG_DIR "/%s/%s/%s", branch, arch, meta.file);
@@ -509,6 +568,7 @@ bool mesh_pkg_path(const char *branch, const char *arch, const char *name,
 
 struct pkg_job {
 	char path[256];
+	char part[264];
 	struct mesh_pkg_meta meta;
 	mesh_pkg_ready cb;
 	void *priv;
@@ -518,10 +578,10 @@ static void download_ready(void *priv, bool ok, char *data, size_t len)
 {
 	struct pkg_job *job = priv;
 
-	ok = ok && pkg_digest_ok(job->path, &job->meta);
+	ok = ok && pkg_digest_ok(job->part, &job->meta) && !rename(job->part, job->path);
 
 	if (!ok)
-		unlink(job->path);
+		unlink(job->part);
 
 	if (job->cb)
 		job->cb(job->priv, ok);
@@ -576,8 +636,9 @@ bool mesh_pkg_download(const char *branch, const char *arch, const char *name,
 	}
 
 	snprintf(url + strlen(url), sizeof(url) - strlen(url), "/%s", job->meta.file);
+	snprintf(job->part, sizeof(job->part), "%s.part", job->path);
 
-	if (!mesh_pkg_get(url, job->path, download_ready, job)) {
+	if (!mesh_pkg_get(url, job->part, download_ready, job)) {
 		free(job);
 
 		return false;

@@ -26,14 +26,16 @@ var callMeshClientForget = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_client_forget',
 	params: [ 'mac' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshClientUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_client_update',
 	params: [ 'mac', 'band', 'alias', 'nodes' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshDiscover = rpc.declare({
@@ -47,7 +49,8 @@ var callMeshAcquire = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_acquire',
 	params: [ 'addr', 'reset' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshAcquireStatus = rpc.declare({
@@ -61,7 +64,8 @@ var callMeshMemberRemove = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_member_remove',
 	params: [ 'id', 'reset' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshLog = rpc.declare({
@@ -74,20 +78,23 @@ var callMeshUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_update',
 	params: [ 'id' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshSelfUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_self_update',
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshMemberUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_member_update',
 	params: [ 'id', 'name', 'nodes' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshSettings = rpc.declare({
@@ -96,21 +103,24 @@ var callMeshSettings = rpc.declare({
 	params: [ 'backhaul_enabled', 'backhaul_ssid', 'backhaul_key', 'wifi_shutdown', 'node_ui',
 		'backhaul_delta', 'backhaul_min_signal', 'auto_update', 'auto_update_every',
 		'auto_update_unit', 'pkg_url' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshNetworkUpdate = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_network_update',
 	params: [ 'ssid', 'roaming' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var callMeshControllerName = rpc.declare({
 	object: 'roamd',
 	method: 'mesh_settings',
 	params: [ 'controller_name' ],
-	expect: { }
+	expect: { },
+	reject: true
 });
 
 var EVENT_TYPE = {
@@ -120,7 +130,9 @@ var EVENT_TYPE = {
 	steer: _('steering'),
 	kick: _('forced disconnect'),
 	'deny-node': _('device not allowed'),
-	'deny-band': _('band not allowed')
+	'deny-band': _('band not allowed'),
+	'cardinal-on': _('held on the preferred band'),
+	'cardinal-off': _('released from the preferred band')
 };
 
 var CLIENT_STATE = {
@@ -180,7 +192,7 @@ function nodeCell(node, band) {
 	if (!node && !band)
 		return '-';
 
-	return common.twoLine(E('span', {}, nodeTitle(node)), band ? common.bandLabel(band) : '');
+	return common.twoLine(E('span', {}, [ nodeTitle(node) ]), band ? common.bandLabel(band) : '');
 }
 
 function timeCell(ts) {
@@ -282,7 +294,11 @@ var ACQUIRE_MSG = [
 	[ /^installing packages on the controller$/, function() { return _('installing the packages'); } ],
 	[ /^package index is not available$/, function() { return _('the package index is not available'); } ],
 	[ /^package installation failed$/, function() { return _('the packages could not be installed'); } ],
-	[ /^wpad: (.+)$/, function(m) { return m[1]; } ]
+	[ /^wpad: (.+)$/, function(m) { return m[1]; } ],
+	[ /^opening SSH on all interfaces$/, function() { return _('opening SSH on all interfaces through the web interface'); } ],
+	[ /^SSH is open$/, function() { return _('SSH is open'); } ],
+	[ /^SSH is closed and the web interface refused to open it$/, function() { return _('SSH is closed and could not be opened through the web interface'); } ],
+	[ /^SSH did not come up after the restart$/, function() { return _('SSH did not come up after the restart'); } ]
 ];
 
 function acquireMsgText(msg) {
@@ -300,6 +316,7 @@ function acquireMsgText(msg) {
 }
 
 var ACQUIRE_STEP = {
+	access: _('opening SSH'),
 	check: _('checking for updates'),
 	probe: _('checking the device'),
 	reset: _('resetting the device'),
@@ -396,18 +413,22 @@ var PKG_STATE_TEXT = {
 function renderCandidate(c) {
 	var ready = c.pkg === 'ready';
 	var lines = [
-		E('strong', {}, c.name || c.addr),
+		E('strong', {}, [ c.name || c.addr ]),
 		E('br'),
-		E('small', {}, '%s · %s · %s · OpenWrt %s'.format(c.addr, c.mac, c.model || '?', c.os || '?'))
+		E('small', {}, [ '%s · %s · %s · OpenWrt %s'.format(c.addr, c.mac, c.model || '?', c.os || '?') ])
 	];
 
 	if (!ready)
 		lines.push(E('div', { 'style': 'color:#c33' }, E('small', {},
-			PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?'))));
+			[ PKG_STATE_TEXT[c.pkg].format(c.os || '?', c.arch || '?') ])));
 
 	if (c.conflict)
 		lines.push(E('div', { 'style': 'color:#c60' }, E('small', {},
-			PKG_STATE_TEXT.conflict.format(c.conflict))));
+			[ PKG_STATE_TEXT.conflict.format(c.conflict) ])));
+
+	if (c.ssh_lan_only)
+		lines.push(E('div', { 'style': 'color:#c60' }, E('small', {},
+			_('SSH is limited to the lan interface — it will be opened during capture'))));
 
 	var action = E('button', {
 		'class': 'btn cbi-button cbi-button-action',
@@ -460,7 +481,7 @@ function startAcquire(addr, button, reset) {
 
 		if (res.error && !res.task_id) {
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
@@ -470,7 +491,7 @@ function startAcquire(addr, button, reset) {
 			dom.content(body, E('p', {}, _('This node is already being captured, showing the progress.')));
 
 		pollAcquire(res.task_id, body, 0, 'acquire');
-	});
+	}, common.rpcError);
 }
 
 function acquireProgress(steps, kind) {
@@ -484,7 +505,9 @@ function acquireProgress(steps, kind) {
 	var failed = null;
 
 	steps.forEach(function(s) {
-		if (order.indexOf(s.step) < 0)
+		if (s.step === 'access' && order.indexOf('access') < 0)
+			order.unshift('access');
+		else if (order.indexOf(s.step) < 0)
 			order.splice(order.length - 1, 0, s.step);
 
 		state[s.step] = s;
@@ -519,7 +542,7 @@ function acquireProgress(steps, kind) {
 		return E('div', {
 			'style': s.status === 'error' ? 'color:#c33'
 				: (state[step] ? '' : 'color:#999')
-		}, '%s %s — %s'.format(mark, acquireStepText(step), text));
+		}, [ '%s %s — %s'.format(mark, acquireStepText(step), text) ]);
 	});
 }
 
@@ -534,7 +557,7 @@ function pollAcquire(task, body, misses, kind) {
 			}
 
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); location.reload(); } }, _('Close')))
 			]);
 			return;
@@ -584,7 +607,7 @@ function renderNodes(state) {
 
 	var deps = state.deps_ready ? '' : E('div', { 'class': 'alert-message warning' }, [
 		E('strong', {}, _('Preparing the controller is not finished')),
-		E('div', {}, state.deps_state || _('the required packages are not installed yet')),
+		E('div', {}, [ state.deps_state || _('the required packages are not installed yet') ]),
 		E('div', {}, E('small', {}, _('The controller retries by itself every five minutes; make sure it has Internet access.')))
 	]);
 
@@ -608,9 +631,9 @@ function renderNodes(state) {
 
 	var running = !busy ? '' : E('div', { 'class': 'alert-message' }, [
 		E('strong', {}, kindNote),
-		E('div', {}, state.acquire.addr
+		E('div', {}, [ state.acquire.addr
 			? _('Device %s, it takes a few minutes. Do not start another task and do not reset the device.').format(state.acquire.addr)
-			: _('It takes a few minutes. Do not start another task and do not reset the device.')),
+			: _('It takes a few minutes. Do not start another task and do not reset the device.') ]),
 		E('div', {}, E('button', {
 			'class': 'btn cbi-button',
 			'click': function() {
@@ -645,7 +668,7 @@ function renderNodes(state) {
 			connectionCell(m), actions ];
 	}));
 
-	cbi_update_table(table, rows, E('em', {}, _('No nodes yet')));
+	cbi_update_table(table, common.textRows(rows), E('em', {}, _('No nodes yet')));
 
 	return E('div', {}, [ deps, running, intro, E('div', {}, addButton), E('br'), table ]);
 }
@@ -703,7 +726,7 @@ function controllerDialog(state) {
 
 	function save() {
 		ui.hideModal();
-		callMeshControllerName(nameInput.value).then(refreshNodes);
+		callMeshControllerName(nameInput.value).then(refreshNodes, common.rpcError);
 	}
 
 	var actions = readOnly || state.auto_update ? [] : [
@@ -736,7 +759,7 @@ function controllerDialog(state) {
 function controllerRow(state) {
 	var self = state.self || {};
 	var name = state.controller_name || self.hostname || _('This device');
-	var cell = common.twoLine(E('strong', {}, name), _('controller'));
+	var cell = common.twoLine(E('strong', {}, [ name ]), _('controller'));
 	var check = E('button', {
 		'class': 'btn cbi-button',
 		'click': function() { controllerDialog(state); }
@@ -775,9 +798,9 @@ function checkSelfUpdate() {
 
 		var rows = res.packages.map(function(p) {
 			return E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td' }, p.name),
-				E('td', { 'class': 'td' }, p.installed || '-'),
-				E('td', { 'class': 'td' }, p.available || '-'),
+				E('td', { 'class': 'td' }, [ p.name ]),
+				E('td', { 'class': 'td' }, [ p.installed || '-' ]),
+				E('td', { 'class': 'td' }, [ p.available || '-' ]),
 				E('td', { 'class': 'td' }, p.outdated ? E('strong', { 'style': 'color:#c60' }, _('update available')) : _('up to date'))
 			]);
 		});
@@ -815,14 +838,14 @@ function startSelfUpdate(body) {
 
 		if (res.error && !res.task_id) {
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
 		}
 
 		pollAcquire(res.task_id, body, 0, 'selfupdate');
-	});
+	}, common.rpcError);
 }
 
 function nameCell(m) {
@@ -836,14 +859,18 @@ function nameCell(m) {
 		'style': 'text-decoration:none;margin-left:.4em'
 	}, '🌐') : '';
 
-	return common.twoLine(E('div', {}, [ E('strong', {}, alias), link ]), sys);
+	return common.twoLine(E('div', {}, [ E('strong', {}, [ alias ]), link ]), sys);
 }
 
 function refreshNodes() {
-	return common.meshStatus().then(function(fresh) {
-		var pane = document.getElementById('mesh-nodes-pane');
+	uci.unload('roamd');
 
-		fresh = fresh || {};
+	return Promise.all([
+		common.meshStatus(),
+		uci.load('roamd').catch(function() { return null; })
+	]).then(function(res) {
+		var pane = document.getElementById('mesh-nodes-pane');
+		var fresh = res[0] || {};
 
 		if (pane)
 			dom.content(pane, renderNodes(fresh));
@@ -899,7 +926,7 @@ function removeMember(id, name) {
 					ui.showModal(_('Remove the node'), [ body ]);
 
 					if (!wipe) {
-						callMeshMemberRemove(id).then(function() { location.reload(); });
+						callMeshMemberRemove(id).then(function() { location.reload(); }, common.rpcError);
 						return;
 					}
 
@@ -908,14 +935,14 @@ function removeMember(id, name) {
 
 						if (res.error && !res.task_id) {
 							dom.content(body, [
-								E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+								E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 								E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); location.reload(); } }, _('Close')))
 							]);
 							return;
 						}
 
 						pollAcquire(res.task_id, body, 0, 'release');
-					});
+					}, common.rpcError);
 				}
 			}, _('Remove'))
 		])
@@ -929,13 +956,13 @@ function updateMember(id, name) {
 	callMeshUpdate(id).then(function(res) {
 		if (res && res.error) {
 			dom.content(body, [
-				E('p', { 'class': 'alert-message warning' }, acquireErrText(res.error)),
+				E('p', { 'class': 'alert-message warning' }, [ acquireErrText(res.error) ]),
 				E('div', { 'class': 'right' }, E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close')))
 			]);
 			return;
 		}
 		pollAcquire(res.task_id, body, 0, 'update');
-	});
+	}, common.rpcError);
 }
 
 function renderLog() {
@@ -968,7 +995,7 @@ function renderLog() {
 		});
 
 		counter.textContent = _('Showing %d of %d records').format(shown.length, all.length);
-		cbi_update_table(table, shown.map(logRow), E('em', {}, _('The transition log is empty')));
+		cbi_update_table(table, common.textRows(shown.map(logRow)), E('em', {}, _('The transition log is empty')));
 	}
 
 	function filterInput(key, ph) {
@@ -988,7 +1015,9 @@ function renderLog() {
 		E('option', { 'value': 'disconnect' }, _('disconnected')),
 		E('option', { 'value': 'kick' }, _('forced disconnect')),
 		E('option', { 'value': 'deny-node' }, _('device not allowed')),
-		E('option', { 'value': 'deny-band' }, _('band not allowed'))
+		E('option', { 'value': 'deny-band' }, _('band not allowed')),
+		E('option', { 'value': 'cardinal-on' }, _('held on the preferred band')),
+		E('option', { 'value': 'cardinal-off' }, _('released from the preferred band'))
 	]);
 
 	var bar = E('div', { 'style': 'display:flex;gap:.5em;align-items:center;margin-bottom:.5em;flex-wrap:wrap' }, [
@@ -1081,7 +1110,7 @@ var readOnly = false;
 function infoRow(label, value) {
 	return E('div', { 'class': 'cbi-value' }, [
 		E('label', { 'class': 'cbi-value-title' }, label),
-		E('div', { 'class': 'cbi-value-field' }, value)
+		E('div', { 'class': 'cbi-value-field' }, typeof(value) === 'string' ? [ value ] : value)
 	]);
 }
 
@@ -1201,12 +1230,12 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		ui.hideModal();
 		callMeshClientUpdate(c.mac, bands.filter(function(l) { return l.firstChild.checked; })
 			.map(function(l) { return l.firstChild.value; })[0] || 'both',
-			nameInput.value, chips.value()).then(refresh);
+			nameInput.value, chips.value()).then(refresh, common.rpcError);
 	}
 
 	function forget() {
 		ui.hideModal();
-		callMeshClientForget(c.mac).then(refresh);
+		callMeshClientForget(c.mac).then(refresh, common.rpcError);
 	}
 
 	var buttons = readOnly
@@ -1227,6 +1256,10 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		]),
 		c.wired ? '' : E('h4', {}, _('Wi-Fi bands allowed for this device')),
 		c.wired ? '' : E('div', { 'class': 'cbi-value' }, bands),
+		c.cardinal && !c.band_lock
+			? E('div', { 'class': 'alert-message notice' },
+				[ _('Cardinal holds this device on %s GHz while its signal there stays good. A manual band rule takes priority.').format(c.cardinal) ])
+			: '',
 		c.band_lock && !c.band_lock_active
 			? E('div', { 'class': 'alert-message warning' },
 				_('The rule is not in effect: the Wi-Fi system has no access points in this band.'))
@@ -1293,7 +1326,7 @@ function nodeDialog(m, state, refresh) {
 
 	function save() {
 		ui.hideModal();
-		callMeshMemberUpdate(m.id, nameInput.value, chips.value()).then(refresh);
+		callMeshMemberUpdate(m.id, nameInput.value, chips.value()).then(refresh, common.rpcError);
 	}
 
 	var busy = state.acquire && state.acquire.running;
@@ -1363,7 +1396,7 @@ function clientNameCell(c, hints, ov, nodeName) {
 		'style': 'display:inline-block;width:.6em;height:.6em;border-radius:50%%;margin-right:.5em;background:%s'
 			.format(clientState(c).color)
 	});
-	var lines = [ E('div', {}, [ dot, E('strong', {}, alias) ]) ];
+	var lines = [ E('div', {}, [ dot, E('strong', {}, [ alias ]) ]) ];
 
 	return E('div', {}, lines);
 }
@@ -1375,7 +1408,7 @@ function addrCell(c, hints) {
 		var ip4 = hintIp4(hints, c.mac);
 
 		if (ip4)
-			lines.push(E('div', {}, ip4));
+			lines.push(E('div', {}, [ ip4 ]));
 		hintIp6(hints, c.mac).forEach(function(a) {
 			lines.push(common.note(a, '#2196a5'));
 		});
@@ -1518,8 +1551,8 @@ function renderClients(state) {
 				(clientSeen(c) ? up : down).push(clientRow(c, hints, ov, nodeName, allNodes, refresh));
 			});
 
-			cbi_update_table(online.table, up, E('em', {}, _('No clients online')));
-			cbi_update_table(offline.table, down, E('em', {}, _('No offline clients')));
+			cbi_update_table(online.table, common.textRows(up), E('em', {}, _('No clients online')));
+			cbi_update_table(offline.table, common.textRows(down), E('em', {}, _('No offline clients')));
 			offline.title.style.display = down.length ? '' : 'none';
 			offline.table.style.display = down.length ? '' : 'none';
 		});
@@ -1608,8 +1641,8 @@ function renderNetworks(state) {
 		});
 
 		rows.push(E('div', { 'class': 'tr' }, [
-			E('div', { 'class': 'td' }, net.ssid),
-			E('div', { 'class': 'td' }, net.encryption || 'none'),
+			E('div', { 'class': 'td' }, [ net.ssid ]),
+			E('div', { 'class': 'td' }, [ net.encryption || 'none' ]),
 			E('div', { 'class': 'td' }, bandsLabel(net.bands || 0)),
 			E('div', { 'class': 'td' }, net.segment
 				? E('span', { 'class': 'label' },
@@ -1823,7 +1856,8 @@ function renderSettings(state) {
 			if (inputs[key].value !== synced[key])
 				return;
 
-			inputs[key].value = form[key] = synced[key] = fresh[key] || '';
+			inputs[key].value = form[key] = synced[key] =
+				(key === 'backhaul_key' ? uci.get('roamd', 'mesh', 'backhaul_key') : fresh[key]) || '';
 		});
 	};
 
@@ -1922,10 +1956,10 @@ function renderController(state) {
 		])
 	]);
 
-	cbi_update_table(table, [[
+	cbi_update_table(table, common.textRows([[
 		ctrl.name || ctrl.id || _('unknown'), ctrl.addr || '-', link,
 		state.member_id || '-', counts.clients || 0
-	]]);
+	]]));
 
 	return E('div', {}, [
 		E('p', {}, _('This node is part of the Wi-Fi system managed by the controller below. The node knows about the controller and about its own clients; the rest of the system is visible on the controller.')),
@@ -1935,7 +1969,16 @@ function renderController(state) {
 
 return view.extend({
 	load: function() {
-		return common.meshStatus().catch(function() { return {}; });
+		return Promise.all([
+			common.meshStatus().catch(function() { return {}; }),
+			uci.load('roamd').catch(function() { return null; })
+		]).then(function(res) {
+			var state = res[0] || {};
+
+			state.backhaul_key = uci.get('roamd', 'mesh', 'backhaul_key') || '';
+
+			return state;
+		});
 	},
 
 	render: function(state) {

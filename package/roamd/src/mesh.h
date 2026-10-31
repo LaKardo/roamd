@@ -49,7 +49,9 @@ enum mesh_event_type {
 	MESH_EV_STEER,
 	MESH_EV_KICK,
 	MESH_EV_DENY_NODE,
-	MESH_EV_DENY_BAND
+	MESH_EV_DENY_BAND,
+	MESH_EV_CARDINAL_ON,
+	MESH_EV_CARDINAL_OFF
 };
 
 struct mesh_event {
@@ -168,7 +170,7 @@ unsigned int mesh_networks_collect(void);
 const struct mesh_network *mesh_network_at(unsigned int i);
 const struct mesh_network *mesh_network_by_ssid(const char *ssid);
 const char *mesh_networks_sum(void);
-void mesh_networks_dump(struct blob_buf *b, const char *name);
+void mesh_networks_dump(struct blob_buf *b, const char *name, bool keys);
 bool mesh_networks_apply(struct blob_attr *networks);
 bool mesh_network_flag(const char *ssid, bool roaming);
 
@@ -206,6 +208,8 @@ typedef void (*mesh_pkg_cb)(void *priv, bool ok, char *data, size_t len);
 typedef void (*mesh_pkg_ready)(void *priv, bool ok);
 
 bool mesh_pkg_get(const char *url, const char *path, mesh_pkg_cb cb, void *priv);
+bool mesh_pkg_meta_valid(const struct mesh_pkg_meta *m);
+bool mesh_pkg_word_valid(const char *s);
 bool mesh_pkg_feed_url(const char *branch, const char *arch, char *out, size_t len);
 bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 		      mesh_pkg_ready cb, void *priv);
@@ -218,6 +222,15 @@ bool mesh_pkg_download(const char *branch, const char *arch, const char *name,
 		       mesh_pkg_ready cb, void *priv);
 
 bool mesh_port_open(const char *addr, uint16_t port, int timeout_ms);
+int mesh_http_ubus(const char *addr, const char *sid, const char *object, const char *method,
+		   const char *args, struct blob_buf *doc, struct blob_attr **data,
+		   int timeout_ms);
+bool mesh_http_login(const char *addr, char *sid, size_t len, int timeout_ms);
+int mesh_http_dropbear_iface(const char *addr, const char *sid, char *sections, size_t len,
+			     int timeout_ms);
+char *mesh_http_file_read(const char *addr, const char *sid, const char *path, int timeout_ms);
+char *mesh_http_board(const char *addr, const char *sid, int timeout_ms);
+bool mesh_http_ssh_open(const char *addr, int timeout_ms);
 int mesh_run(char *const argv[], int in_fd, char *out, size_t len, int timeout_ms);
 int mesh_ssh(const char *addr, const char *cmd, char *out, size_t len, int timeout_ms);
 int mesh_ssh_pass(const char *addr, const char *cmd, char *out, size_t len, int timeout_ms);
@@ -283,6 +296,15 @@ int mesh_release_run(const char *id, const char *task);
 int mesh_deps_ensure(bool need_only);
 bool mesh_pkg_probe(const char *url);
 bool mesh_random_hex(char *out, size_t bytes);
+bool mesh_valid_id(const char *s);
+bool mesh_valid_task(const char *s);
+bool mesh_valid_mac(const char *s);
+bool mesh_valid_addr(const char *s);
+bool mesh_valid_hex(const char *s);
+const char *mesh_shq(char *out, size_t len, const char *s);
+extern const char *const mesh_global_opts[];
+extern const char *const mesh_policy_opts[];
+extern const char *const mesh_backhaul_opts[];
 void mesh_ubus_reload(void);
 bool mesh_ubus_call(const char *method, const char *json);
 
@@ -379,6 +401,9 @@ void mesh_assoc_blob(struct blob_buf *b, const struct mesh_assoc *a);
 void mesh_clients_dump(struct blob_buf *b);
 unsigned int mesh_clients_count(void);
 unsigned int mesh_clients_local(void);
+typedef void (*mesh_client_cb)(const uint8_t *addr, const char *mac, const char *node,
+			       const int *sig, const uint32_t *sig_age, void *priv);
+void mesh_clients_each(mesh_client_cb cb, void *priv);
 bool mesh_client_forget(const char *mac);
 void mesh_clients_load(void);
 void mesh_clients_save(void);

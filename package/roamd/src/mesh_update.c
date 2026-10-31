@@ -147,7 +147,8 @@ bool mesh_release_parse(char *data, char *branch, size_t bl, char *arch, size_t 
 		}
 	}
 
-	return have_branch && have_arch;
+	return have_branch && have_arch &&
+	       mesh_pkg_word_valid(branch) && mesh_pkg_word_valid(arch);
 }
 
 bool mesh_self_release(char *branch, size_t bl, char *arch, size_t al)

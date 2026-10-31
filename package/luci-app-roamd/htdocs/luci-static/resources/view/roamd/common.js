@@ -1,6 +1,7 @@
 'use strict';
 'require baseclass';
 'require rpc';
+'require ui';
 'require uci';
 
 var callMeshStatus = rpc.declare({
@@ -30,7 +31,8 @@ function note(text, color) {
 	if (!text)
 		return '';
 
-	return E('div', {}, E('small', { 'style': 'color:%s'.format(color || '#888') }, text));
+	return E('div', {}, E('small', { 'style': 'color:%s'.format(color || '#888') },
+		typeof(text) === 'string' ? [ text ] : text));
 }
 
 function twoLine(main, sub) {
@@ -52,8 +54,22 @@ return baseclass.extend({
 		}, [ E('div', {}, actions), E('div', {}, buttons) ]);
 	},
 
+	rpcError: function(err) {
+		ui.hideModal();
+		ui.addNotification(null, E('p', {}, [ _('The request failed: %s').format(err && err.message || err) ]), 'danger');
+	},
+
+	textRows: function(rows) {
+		return (rows || []).map(function(row) {
+			return row.map(function(cell) {
+				return (typeof(cell) === 'string' || typeof(cell) === 'number')
+					? document.createTextNode(String(cell)) : cell;
+			});
+		});
+	},
+
 	macCell: function(name, mac) {
-		return name ? twoLine(E('strong', {}, name), mac) : E('strong', {}, mac || '');
+		return name ? twoLine(E('strong', {}, [ name ]), mac) : E('strong', {}, [ mac || '' ]);
 	},
 
 	hostHints: function() {
@@ -109,7 +125,7 @@ return baseclass.extend({
 		var addr = ctrl.addr ? ' (%s)'.format(ctrl.addr) : '';
 		var age = ctrl.last_contact || 0;
 		var lines = [
-			E('p', {}, _('This device is managed by the Mesh controller %s%s. Settings on this page are read-only: they come from the controller. To take the device out of the Wi-Fi system, reset it to factory settings.').format(name, addr))
+			E('p', {}, [ _('This device is managed by the Mesh controller %s%s. Settings on this page are read-only: they come from the controller. To take the device out of the Wi-Fi system, reset it to factory settings.').format(name, addr) ])
 		];
 
 		if (age > 60)

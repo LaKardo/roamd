@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1341,7 +1342,26 @@ void mesh_node_watch_start(void)
 	uloop_timeout_set(&watch_timer, MESH_WATCH_INTERVAL);
 }
 
-static void apply_table(struct uci_session *u, const char *section, struct blob_attr *table)
+static bool opt_allowed(const char *const *allowed, const char *name)
+{
+	for (; *allowed; allowed++)
+		if (!strcmp(*allowed, name))
+			return true;
+
+	return false;
+}
+
+static bool opt_value_safe(const char *v)
+{
+	for (; *v; v++)
+		if (*v == '\n' || *v == '\r')
+			return false;
+
+	return true;
+}
+
+static void apply_table(struct uci_session *u, const char *section, struct blob_attr *table,
+			const char *const *allowed)
 {
 	struct blob_attr *cur;
 	int rem;
@@ -1352,6 +1372,14 @@ static void apply_table(struct uci_session *u, const char *section, struct blob_
 	blobmsg_for_each_attr(cur, table, rem) {
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING)
 			continue;
+
+		if (!opt_allowed(allowed, blobmsg_name(cur)) ||
+		    !opt_value_safe(blobmsg_get_string(cur))) {
+			roam_log(ROAM_L_ERR, "mesh: profile option %s.%s rejected",
+				 section, blobmsg_name(cur));
+			continue;
+		}
+
 		uci_session_set(u, section, blobmsg_name(cur), blobmsg_get_string(cur));
 	}
 }
@@ -1463,6 +1491,7 @@ static void authorized_drop(const char *key)
 		fclose(in);
 		return;
 	}
+	fchmod(fileno(out), 0600);
 
 	while (fgets(line, sizeof(line), in)) {
 		size_t len = strcspn(line, "\r\n");
@@ -1474,8 +1503,10 @@ static void authorized_drop(const char *key)
 	}
 
 	fclose(in);
-	fclose(out);
-	chmod(SSH_AUTHORIZED ".roamd", 0600);
+	if (fclose(out)) {
+		unlink(SSH_AUTHORIZED ".roamd");
+		return;
+	}
 	rename(SSH_AUTHORIZED ".roamd", SSH_AUTHORIZED);
 }
 
@@ -1506,6 +1537,47 @@ void mesh_node_key_ensure(void)
 	}
 }
 
+static bool pubkey_valid(const char *key)
+{
+	static const char *const types[] = { "ssh-ed25519 ", "ssh-rsa ", "ecdsa-sha2-nistp256 " };
+	size_t i, len = strlen(key);
+	const char *p = NULL;
+
+	if (len >= MESH_PUBKEY_MAX)
+		return false;
+
+	for (i = 0; i < ARRAY_SIZE(types) && !p; i++)
+		if (!strncmp(key, types[i], strlen(types[i])))
+			p = key + strlen(types[i]);
+
+	if (!p || !*p)
+		return false;
+
+	for (; *p && *p != ' '; p++)
+		if (!isalnum((unsigned char)*p) && *p != '+' && *p != '/' && *p != '=')
+			return false;
+
+	for (; *p; p++)
+		if (*p < 0x20 || *p > 0x7e)
+			return false;
+
+	return true;
+}
+
+static bool root_hash_valid(const char *hash)
+{
+	size_t i;
+
+	if (hash[0] != '$' || strlen(hash) > 256)
+		return false;
+
+	for (i = 0; hash[i]; i++)
+		if (!isalnum((unsigned char)hash[i]) && !strchr("$./=", hash[i]))
+			return false;
+
+	return true;
+}
+
 static void apply_pubkey(enum mesh_key k, struct blob_attr *attr)
 {
 	const char *pubkey = attr ? blobmsg_get_string(attr) : NULL;
@@ -1513,6 +1585,12 @@ static void apply_pubkey(enum mesh_key k, struct blob_attr *attr)
 
 	if (!pubkey || !pubkey[0] || !strcmp(mesh.ssh_pubkey[k], pubkey))
 		return;
+
+	if (!pubkey_valid(pubkey)) {
+		roam_log(ROAM_L_ERR, "mesh: malformed %s from the controller rejected",
+			 mesh_key_fields[k]);
+		return;
+	}
 
 	if (mesh.ssh_pubkey[k][0])
 		authorized_drop(mesh.ssh_pubkey[k]);
@@ -1554,6 +1632,10 @@ static bool apply_credentials(struct blob_attr *cred)
 	if (!rh)
 		return false;
 	hash = blobmsg_get_string(rh);
+	if (!root_hash_valid(hash)) {
+		roam_log(ROAM_L_ERR, "mesh: malformed root password hash rejected");
+		return false;
+	}
 
 	in = fopen("/etc/shadow", "r");
 	if (!in)
@@ -1563,6 +1645,7 @@ static bool apply_credentials(struct blob_attr *cred)
 		fclose(in);
 		return false;
 	}
+	fchmod(fileno(out), 0600);
 
 	while (fgets(line, sizeof(line), in)) {
 		if (!strncmp(line, "root:", 5)) {
@@ -1583,10 +1666,10 @@ static bool apply_credentials(struct blob_attr *cred)
 	}
 
 	fclose(in);
-	fclose(out);
+	if (fclose(out))
+		wrote = false;
 
 	if (wrote && changed) {
-		chmod("/etc/shadow.roamd", 0600);
 		rename("/etc/shadow.roamd", "/etc/shadow");
 		return true;
 	}
@@ -1747,15 +1830,17 @@ bool mesh_node_apply(struct blob_attr *msg)
 		return false;
 
 	from = blobmsg_get_string(tb[APPLY_CONTROLLER_ID]);
-	if (mesh.controller_id[0] && strcmp(from, mesh.controller_id))
+	if (!mesh.controller_id[0] || strcmp(from, mesh.controller_id)) {
+		roam_log(ROAM_L_ERR, "mesh: profile from an unknown controller rejected");
 		return false;
+	}
 
 	if (!uci_session_open(&u, "roamd"))
 		return false;
 
-	apply_table(&u, "global", tb[APPLY_GLOBAL]);
-	apply_table(&u, "policy", tb[APPLY_POLICY]);
-	apply_table(&u, "mesh", tb[APPLY_BACKHAUL]);
+	apply_table(&u, "global", tb[APPLY_GLOBAL], mesh_global_opts);
+	apply_table(&u, "policy", tb[APPLY_POLICY], mesh_policy_opts);
+	apply_table(&u, "mesh", tb[APPLY_BACKHAUL], mesh_backhaul_opts);
 	apply_devices(&u, tb[APPLY_DEVICES]);
 
 	uci_session_close(&u);
@@ -1790,7 +1875,7 @@ static void node_profile(struct blob_buf *b)
 	void *t = blobmsg_open_table(b, "profile");
 
 	blobmsg_add_string(b, "networks_sum", mesh.networks_sum);
-	mesh_networks_dump(b, "networks");
+	mesh_networks_dump(b, "networks", false);
 
 	if (mesh.backhaul_ssid[0])
 		blobmsg_add_string(b, "backhaul_ssid", mesh.backhaul_ssid);

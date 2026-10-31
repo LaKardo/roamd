@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 #define RESET_BACK_WAIT		240
 #define RESET_PROBE_TIMEOUT	10000
 #define PAYLOAD_MAX	8192
+#define ACCESS_WAIT	30
 
 static const char pkg_lock[] =
 	"pkg_run() { ( exec 9>/tmp/roamd-pkg.lock; w=0; until flock -n 9; do "
@@ -69,6 +71,42 @@ static void uplink_probe(const char *addr, char *out, size_t len)
 		snprintf(out, len,
 			 "ip -o -4 addr show 2>/dev/null | "
 			 "awk -v a='%s/' 'index($4, a) == 1 { print $2; exit }'", bare);
+}
+
+static bool ssh_wait(const char *addr)
+{
+	int waited;
+
+	for (waited = 0; waited < ACCESS_WAIT; waited += 2) {
+		if (mesh_port_open(addr, 22, 2000))
+			return true;
+
+		sleep(2);
+	}
+
+	return false;
+}
+
+static bool ssh_access(struct acquire_ctx *c)
+{
+	if (mesh_port_open(c->addr, 22, 3000))
+		return true;
+
+	mesh_task_report(c->task, "access", "progress", "opening SSH on all interfaces");
+
+	if (!mesh_http_ssh_open(c->addr, SSH_SHORT)) {
+		fail(c, "access", "SSH is closed and the web interface refused to open it");
+		return false;
+	}
+
+	if (!ssh_wait(c->addr)) {
+		fail(c, "access", "SSH did not come up after the restart");
+		return false;
+	}
+
+	mesh_task_report(c->task, "access", "ok", "SSH is open");
+
+	return true;
 }
 
 static bool board_read(struct acquire_ctx *c)
@@ -153,6 +191,10 @@ static bool mac_read(struct acquire_ctx *c)
 	if (strlen(out) < 17)
 		return false;
 
+	out[17] = 0;
+	if (!mesh_valid_mac(out))
+		return false;
+
 	snprintf(c->mac, sizeof(c->mac), "%.17s", out);
 	snprintf(c->member_id, sizeof(c->member_id), "%c%c%c%c%c%c",
 		 out[9], out[10], out[12], out[13], out[15], out[16]);
@@ -221,6 +263,9 @@ static bool factory_reset(struct acquire_ctx *c)
 
 	for (waited = 0; waited < RESET_BACK_WAIT; waited += 10) {
 		sleep(10);
+
+		if (!mesh_port_open(back, 22, 2000) && mesh_http_ssh_open(back, SSH_SHORT))
+			ssh_wait(back);
 
 		if (mesh_ssh(back, "exit 0", NULL, 0, RESET_PROBE_TIMEOUT))
 			continue;
@@ -296,7 +341,7 @@ static int node_clock(struct acquire_ctx *c)
 static int enroll_role(struct acquire_ctx *c)
 {
 	char payload[PAYLOAD_MAX];
-	char cname[MESH_NAME_MAX] = "";
+	char cname[MESH_NAME_MAX] = "", qname[MESH_NAME_MAX * 4];
 	struct uci_session u;
 	struct uci_section *s;
 
@@ -318,6 +363,10 @@ static int enroll_role(struct acquire_ctx *c)
 		 "sed -n 's/^wireless\\.\\(mesh_bh_[a-z0-9_]*\\)=wifi-iface$/\\1/p'); do "
 		 "uci -q delete wireless.$sect; done\n"
 		 "uci -q commit wireless\n"
+		 "for sect in $(uci -q show dropbear | "
+		 "sed -n 's/^dropbear\\.\\([^.]*\\)\\.Interface=.*/\\1/p'); do "
+		 "uci -q delete dropbear.$sect.Interface; done\n"
+		 "uci -q commit dropbear\n"
 		 "uci -q delete roamd.mesh.backhaul_ssid\n"
 		 "uci -q delete roamd.mesh.backhaul_key\n"
 		 "uci set roamd.mesh.role='node'\n"
@@ -330,7 +379,7 @@ static int enroll_role(struct acquire_ctx *c)
 		 "/etc/init.d/rpcd reload >/dev/null 2>&1\n"
 		 "/etc/init.d/roamd enable >/dev/null 2>&1\n"
 		 "/etc/init.d/roamd restart >/dev/null 2>&1\n",
-		 mesh.controller_id, cname, c->caddr, c->member_id);
+		 mesh.controller_id, mesh_shq(qname, sizeof(qname), cname), c->caddr, c->member_id);
 
 	return mesh_ssh(c->addr, payload, NULL, 0, SSH_LONG);
 }
@@ -414,8 +463,15 @@ static int enroll_channel(struct acquire_ctx *c, const char *token)
 
 	if (p) {
 		size_t len = strcspn(p, " ");
+		size_t i;
 
 		snprintf(px5g, sizeof(px5g), "%.*s", (int)len, p);
+
+		for (i = 0; px5g[i]; i++)
+			if (!isalnum((unsigned char)px5g[i]) && px5g[i] != '-') {
+				px5g[0] = 0;
+				break;
+			}
 	}
 
 	snprintf(payload, sizeof(payload),
@@ -450,7 +506,8 @@ static int enroll_channel(struct acquire_ctx *c, const char *token)
 
 static void enroll_key(struct acquire_ctx *c)
 {
-	char pubkey[MESH_PUBKEY_MAX], payload[PAYLOAD_MAX], cmd[MESH_PUBKEY_MAX * 3 + 256];
+	char pubkey[MESH_PUBKEY_MAX], qkey[MESH_PUBKEY_MAX * 4], payload[PAYLOAD_MAX];
+	char cmd[MESH_PUBKEY_MAX * 12 + 256];
 	bool installed = false;
 	unsigned int k;
 
@@ -458,11 +515,12 @@ static void enroll_key(struct acquire_ctx *c)
 		if (!mesh_ssh_pubkey(k, pubkey, sizeof(pubkey)))
 			continue;
 
+		mesh_shq(qkey, sizeof(qkey), pubkey);
 		snprintf(cmd, sizeof(cmd),
 			 "mkdir -p /etc/dropbear; grep -qxF '%s' /etc/dropbear/authorized_keys 2>/dev/null || "
 			 "printf '%%s\\n' '%s' >> /etc/dropbear/authorized_keys; "
 			 "chmod 600 /etc/dropbear/authorized_keys; "
-			 "grep -qxF '%s' /etc/dropbear/authorized_keys", pubkey, pubkey, pubkey);
+			 "grep -qxF '%s' /etc/dropbear/authorized_keys", qkey, qkey, qkey);
 
 		if (!mesh_ssh(c->addr, cmd, NULL, 0, SSH_SHORT))
 			installed = true;
@@ -507,10 +565,17 @@ int mesh_acquire_run(const char *addr, const char *task, bool reset)
 	int rc, waited;
 
 	mesh_task_open(task);
+
+	if (!mesh_valid_addr(addr))
+		return fail(&c, "probe", "the device address is malformed");
+
 	snprintf(c.addr, sizeof(c.addr), "%s", addr);
 
 	mesh_ssh_key_ensure();
 	mesh_node_forget(c.addr);
+
+	if (!ssh_access(&c))
+		return 1;
 
 	if (!board_read(&c))
 		return fail(&c, "probe", "SSH root without a password is not available");

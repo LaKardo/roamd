@@ -40,6 +40,8 @@ static const char *const type_name[] = {
 	[MESH_EV_KICK] = "kick",
 	[MESH_EV_DENY_NODE] = "deny-node",
 	[MESH_EV_DENY_BAND] = "deny-band",
+	[MESH_EV_CARDINAL_ON] = "cardinal-on",
+	[MESH_EV_CARDINAL_OFF] = "cardinal-off",
 };
 
 const char *mesh_event_type_name(enum mesh_event_type t)

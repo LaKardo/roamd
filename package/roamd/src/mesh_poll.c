@@ -74,6 +74,7 @@ static bool force_apply;
 static char *profile_json;
 static char profile_sum[MESH_NET_SUM_LEN];
 static void poll_watchdog_cb(struct uloop_timeout *t);
+static void cardinal_push(void);
 static struct uloop_timeout poll_watchdog = { .cb = poll_watchdog_cb };
 
 bool mesh_poll_busy(void)
@@ -183,7 +184,7 @@ static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client
 			continue;
 
 		mac = attr_str(cur, "mac");
-		if (!mac || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
+		if (!mac || !mesh_valid_mac(mac) || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
 			continue;
 
 		ea = ether_aton(mac);
@@ -221,7 +222,7 @@ static void ap_collect(struct poll_node *n, struct blob_attr *list)
 
 		bssid = attr_str(cur, "bssid");
 		ssid = attr_str(cur, "ssid");
-		if (!bssid || !ssid)
+		if (!bssid || !ssid || !mesh_valid_mac(bssid))
 			continue;
 
 		a = &n->ap[n->n_ap++];
@@ -232,9 +233,24 @@ static void ap_collect(struct poll_node *n, struct blob_attr *list)
 		if (band)
 			snprintf(a->band, sizeof(a->band), "%s", band);
 		nr = attr_str(cur, "nr");
-		if (nr)
+		if (nr && mesh_valid_hex(nr) && strlen(nr) < sizeof(a->nr))
 			snprintf(a->nr, sizeof(a->nr), "%s", nr);
 	}
+}
+
+static bool member_field_reserved(const char *name)
+{
+	static const char *const reserved[] = {
+		"online", "update_available", "consistency", "pkg_source", "issues",
+		"id", "managed", "bh_nodes", "bh_nodes_void"
+	};
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(reserved); i++)
+		if (!strcmp(name, reserved[i]))
+			return true;
+
+	return false;
 }
 
 static void member_file_write(const struct poll_node *n, struct blob_attr *report,
@@ -254,7 +270,8 @@ static void member_file_write(const struct poll_node *n, struct blob_attr *repor
 
 	if (report)
 		blobmsg_for_each_attr(cur, report, rem)
-			blobmsg_add_blob(&b, cur);
+			if (!member_field_reserved(blobmsg_name(cur)))
+				blobmsg_add_blob(&b, cur);
 
 	blobmsg_add_u8(&b, "online", report != NULL);
 
@@ -290,9 +307,13 @@ static void member_file_write(const struct poll_node *n, struct blob_attr *repor
 
 	f = fopen(tmp, "w");
 	if (f) {
-		fputs(json, f);
-		fclose(f);
-		rename(tmp, path);
+		bool ok = fputs(json, f) >= 0;
+
+		ok = !fclose(f) && ok;
+		if (ok)
+			rename(tmp, path);
+		else
+			unlink(tmp);
 	}
 
 	free(json);
@@ -466,6 +487,7 @@ static void poll_finish(void)
 	bands_refresh();
 	ft_kh_refresh();
 	steer_round();
+	cardinal_push();
 	busy = false;
 }
 
@@ -808,7 +830,7 @@ static void ghosts_drop(unsigned int from, unsigned int to)
 static void neighbors_push(void)
 {
 	static struct blob_buf b;
-	unsigned int i, j, count = 0;
+	unsigned int i, j;
 	char *json;
 	void *arr;
 
@@ -828,13 +850,9 @@ static void neighbors_push(void)
 			blobmsg_add_string(&b, "ssid", a->ssid);
 			blobmsg_add_string(&b, "nr", a->nr);
 			blobmsg_close_table(&b, t);
-			count++;
 		}
 
 	blobmsg_close_array(&b, arr);
-
-	if (!count)
-		return;
 
 	json = blobmsg_format_json(b.head, true);
 	if (!json)
@@ -843,6 +861,24 @@ static void neighbors_push(void)
 	for (i = 0; i < n_nodes; i++)
 		if (nodes[i].online)
 			member_call(&nodes[i], "mesh_neighbors", json);
+
+	free(json);
+}
+
+static void cardinal_push(void)
+{
+	unsigned int i;
+	char *json;
+
+	cardinal_poll_done();
+
+	json = cardinal_locks_json();
+	if (!json)
+		return;
+
+	for (i = 0; i < n_nodes; i++)
+		if (nodes[i].online && strcmp(nodes[i].id, SELF_ID))
+			member_call(&nodes[i], "mesh_cardinal", json);
 
 	free(json);
 }

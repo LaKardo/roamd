@@ -14,6 +14,7 @@
 #define PROBE_TIMEOUT	15000
 #define PROBE_TRIES	3
 #define SSH_PORT	22
+#define HTTP_PORT	80
 #define PORT_TIMEOUT	1500
 
 static const char port_closed[] = "SSH port is closed";
@@ -28,6 +29,7 @@ struct probe_info {
 	char arch[MESH_ARCH_MAX];
 	char conflict[MESH_WORD_MAX];
 	const char *pkg;
+	bool ssh_lan_only;
 };
 
 static bool own_address(const char *addr, struct mesh_neigh *list, unsigned int n)
@@ -127,6 +129,41 @@ static const char *pkg_state(const char *os, const char *arch)
 	       "ready" : "unreachable";
 }
 
+static const char *probe_http(const char *addr, struct probe_info *info)
+{
+	char sid[40], branch[MESH_WORD_MAX], *board, *release;
+	int limited;
+
+	if (!mesh_port_open(addr, HTTP_PORT, PORT_TIMEOUT) ||
+	    !mesh_http_login(addr, sid, sizeof(sid), PROBE_TIMEOUT))
+		return port_closed;
+
+	board = mesh_http_board(addr, sid, PROBE_TIMEOUT);
+	if (!board || !board_parse(board, info)) {
+		free(board);
+		return "not an OpenWrt device";
+	}
+	free(board);
+
+	limited = mesh_http_dropbear_iface(addr, sid, NULL, 0, PROBE_TIMEOUT);
+	if (limited <= 0)
+		return port_closed;
+
+	roam_log(ROAM_L_INFO, "mesh: discover: %s: SSH listens on lan only (dropbear Interface)",
+		 addr);
+	info->ssh_lan_only = true;
+
+	release = mesh_http_file_read(addr, sid, "/etc/openwrt_release", PROBE_TIMEOUT);
+	if (!release || !mesh_release_parse(release, branch, sizeof(branch), info->arch,
+					    sizeof(info->arch)))
+		info->arch[0] = 0;
+	free(release);
+
+	info->pkg = pkg_state(info->os, info->arch);
+
+	return NULL;
+}
+
 static const char *probe(const char *addr, const char *mac, struct probe_info *info)
 {
 	char buf[2048];
@@ -137,7 +174,7 @@ static const char *probe(const char *addr, const char *mac, struct probe_info *i
 	snprintf(info->mac, sizeof(info->mac), "%s", mac);
 
 	if (!mesh_port_open(addr, SSH_PORT, PORT_TIMEOUT))
-		return port_closed;
+		return probe_http(addr, info);
 
 	for (try = 0; mesh_ssh_pass(addr, "ubus call system board", buf, sizeof(buf),
 				    PROBE_TIMEOUT); try++)
@@ -294,6 +331,9 @@ int mesh_discover_run(void)
 
 		if (info.conflict[0])
 			blobmsg_add_string(&b, "conflict", info.conflict);
+
+		if (info.ssh_lan_only)
+			blobmsg_add_u8(&b, "ssh_lan_only", 1);
 
 		blobmsg_close_table(&b, t);
 	}

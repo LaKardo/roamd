@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.2.0-r2
+PKG_VERSION:=1.3.0-r1
 PKG_RELEASE:=
 
 PKG_LICENSE:=Apache-2.0
@@ -17,7 +17,7 @@ define Package/roamd
   CATEGORY:=Network
   SUBMENU:=wireless
   TITLE:=Wi-Fi band steering and fast roaming daemon
-  DEPENDS:=+libubox +libubus +libuci +libblobmsg-json +libuclient
+  DEPENDS:=+libubox +libubus +libuci +libblobmsg-json +libuclient +ca-bundle
   CONFLICTS:=usteer dawn
   EXTRA_DEPENDS:=$(if $(CONFIG_USE_APK),!usteer (>=0)$(comma) !dawn (>=0))
   URL:=https://github.com/Ground-Zerro/roamd
