@@ -177,6 +177,7 @@ publish_feeds() {
 	done
 
 	[ -n "$version" ] || return 0
+	ls "$all"/* >/dev/null 2>&1 || { echo "нет пакетов для v$version" >&2; return 1; }
 
 	tag="v$version"
 	if gh release view "$tag" >/dev/null 2>&1; then
