@@ -724,6 +724,34 @@ static int roamd_mesh_neighbors(struct ubus_context *ctx, struct ubus_object *ob
 	return 0;
 }
 
+static int roamd_mesh_cardinal(struct ubus_context *ctx, struct ubus_object *obj,
+			struct ubus_request_data *req, const char *method,
+			struct blob_attr *msg)
+{
+	static const struct blobmsg_policy lp = { "locks", BLOBMSG_TYPE_ARRAY };
+	struct blob_attr *tb = NULL;
+
+	if (!mesh.enabled || mesh.role != MESH_NODE)
+		return UBUS_STATUS_PERMISSION_DENIED;
+
+	blobmsg_parse(&lp, 1, &tb, blob_data(msg), blob_len(msg));
+	cardinal_set_remote(tb);
+
+	return 0;
+}
+
+static int roamd_cardinal(struct ubus_context *ctx, struct ubus_object *obj,
+			struct ubus_request_data *req, const char *method,
+			struct blob_attr *msg)
+{
+	roam_time_update();
+	blob_buf_init(&b, 0);
+	cardinal_dump(&b);
+	ubus_send_reply(ctx, req, b.head);
+
+	return 0;
+}
+
 static int roamd_mesh_log(struct ubus_context *ctx, struct ubus_object *obj,
 			struct ubus_request_data *req, const char *method,
 			struct blob_attr *msg)
@@ -794,6 +822,8 @@ static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD("mesh_steer", roamd_mesh_steer, mesh_arg_policy),
 	UBUS_METHOD("mesh_drop", roamd_mesh_drop, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_neighbors", roamd_mesh_neighbors),
+	UBUS_METHOD_NOARG("mesh_cardinal", roamd_mesh_cardinal),
+	UBUS_METHOD_NOARG("cardinal", roamd_cardinal),
 	UBUS_METHOD_NOARG("mesh_log", roamd_mesh_log),
 	UBUS_METHOD("mesh_log_ingest", roamd_mesh_log_ingest, ingest_policy),
 };

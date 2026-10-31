@@ -3,12 +3,12 @@
 		"description": "roamd mesh control channel",
 		"read": {
 			"ubus": {
-				"roamd": [ "status", "mesh_status", "mesh_role", "mesh_report", "mesh_diag" ]
+				"roamd": [ "status", "mesh_status", "mesh_role", "mesh_report", "mesh_diag", "cardinal" ]
 			}
 		},
 		"write": {
 			"ubus": {
-				"roamd": [ "reload", "mesh_apply", "mesh_steer", "mesh_drop", "mesh_neighbors" ]
+				"roamd": [ "reload", "mesh_apply", "mesh_steer", "mesh_drop", "mesh_neighbors", "mesh_cardinal" ]
 			}
 		}
 	}

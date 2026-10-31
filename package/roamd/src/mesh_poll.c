@@ -74,6 +74,7 @@ static bool force_apply;
 static char *profile_json;
 static char profile_sum[MESH_NET_SUM_LEN];
 static void poll_watchdog_cb(struct uloop_timeout *t);
+static void cardinal_push(void);
 static struct uloop_timeout poll_watchdog = { .cb = poll_watchdog_cb };
 
 bool mesh_poll_busy(void)
@@ -486,6 +487,7 @@ static void poll_finish(void)
 	bands_refresh();
 	ft_kh_refresh();
 	steer_round();
+	cardinal_push();
 	busy = false;
 }
 
@@ -859,6 +861,24 @@ static void neighbors_push(void)
 	for (i = 0; i < n_nodes; i++)
 		if (nodes[i].online)
 			member_call(&nodes[i], "mesh_neighbors", json);
+
+	free(json);
+}
+
+static void cardinal_push(void)
+{
+	unsigned int i;
+	char *json;
+
+	cardinal_poll_done();
+
+	json = cardinal_locks_json();
+	if (!json)
+		return;
+
+	for (i = 0; i < n_nodes; i++)
+		if (nodes[i].online && strcmp(nodes[i].id, SELF_ID))
+			member_call(&nodes[i], "mesh_cardinal", json);
 
 	free(json);
 }

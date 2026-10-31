@@ -103,6 +103,11 @@ struct roam_config {
 	uint32_t steer_retries;
 	uint32_t beacon_req_interval;
 	int log_level;
+
+	bool cardinal;
+	uint32_t cardinal_window;
+	uint32_t cardinal_error_max;
+	int cardinal_delta;
 };
 
 struct roam_bss {
@@ -234,6 +239,13 @@ void roam_sta_disconnected(struct roam_sta *sta);
 void roam_sta_reset(struct roam_sta *sta);
 int roam_sta_signal(const struct roam_sta *sta, enum roam_band band);
 int roam_sta_signal_seen(const struct roam_sta *sta, enum roam_band band, uint32_t *age);
+
+void cardinal_init(void);
+enum roam_band cardinal_lock(const uint8_t *addr);
+void cardinal_set_remote(struct blob_attr *locks);
+void cardinal_poll_done(void);
+char *cardinal_locks_json(void);
+void cardinal_dump(struct blob_buf *b);
 
 bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev);
 void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from);

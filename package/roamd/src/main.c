@@ -24,6 +24,7 @@ static void setup_run(struct uloop_timeout *t)
 	roam_bss_init();
 	roam_wireless_apply();
 	mesh_start();
+	cardinal_init();
 
 	roam_log(ROAM_L_INFO, "roamd: connected to ubus");
 }

@@ -130,7 +130,9 @@ var EVENT_TYPE = {
 	steer: _('steering'),
 	kick: _('forced disconnect'),
 	'deny-node': _('device not allowed'),
-	'deny-band': _('band not allowed')
+	'deny-band': _('band not allowed'),
+	'cardinal-on': _('held on the preferred band'),
+	'cardinal-off': _('released from the preferred band')
 };
 
 var CLIENT_STATE = {
@@ -1013,7 +1015,9 @@ function renderLog() {
 		E('option', { 'value': 'disconnect' }, _('disconnected')),
 		E('option', { 'value': 'kick' }, _('forced disconnect')),
 		E('option', { 'value': 'deny-node' }, _('device not allowed')),
-		E('option', { 'value': 'deny-band' }, _('band not allowed'))
+		E('option', { 'value': 'deny-band' }, _('band not allowed')),
+		E('option', { 'value': 'cardinal-on' }, _('held on the preferred band')),
+		E('option', { 'value': 'cardinal-off' }, _('released from the preferred band'))
 	]);
 
 	var bar = E('div', { 'style': 'display:flex;gap:.5em;align-items:center;margin-bottom:.5em;flex-wrap:wrap' }, [
@@ -1252,6 +1256,10 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		]),
 		c.wired ? '' : E('h4', {}, _('Wi-Fi bands allowed for this device')),
 		c.wired ? '' : E('div', { 'class': 'cbi-value' }, bands),
+		c.cardinal && !c.band_lock
+			? E('div', { 'class': 'alert-message notice' },
+				[ _('Cardinal holds this device on %s GHz while its signal there stays good. A manual band rule takes priority.').format(c.cardinal) ])
+			: '',
 		c.band_lock && !c.band_lock_active
 			? E('div', { 'class': 'alert-message warning' },
 				_('The rule is not in effect: the Wi-Fi system has no access points in this band.'))

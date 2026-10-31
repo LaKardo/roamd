@@ -485,6 +485,20 @@ unsigned int mesh_clients_count(void)
 	return n;
 }
 
+void mesh_clients_each(mesh_client_cb cb, void *priv)
+{
+	unsigned int i;
+
+	clients_refresh();
+
+	for (i = 0; i < MESH_CLIENT_MAX; i++) {
+		const struct client_rec *c = &clients[i];
+
+		if (c->used && c->state == CLIENT_ONLINE && !c->wired && c->band[0])
+			cb(c->addr, c->mac, c->node, c->sig, c->sig_age, priv);
+	}
+}
+
 unsigned int mesh_clients_local(void)
 {
 	unsigned int i, n = 0;
@@ -635,6 +649,8 @@ void mesh_clients_dump(struct blob_buf *b)
 			blobmsg_add_string(b, "band_lock", roam_band_name(locked));
 			blobmsg_add_u8(b, "band_lock_active",
 				       mesh_band_usable(roam_band_bit(locked)));
+		} else if (cardinal_lock(c->addr) != BAND_MAX) {
+			blobmsg_add_string(b, "cardinal", roam_band_name(cardinal_lock(c->addr)));
 		}
 
 		if (!c->wired && mesh.role == MESH_CONTROLLER &&

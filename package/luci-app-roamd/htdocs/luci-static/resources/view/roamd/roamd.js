@@ -661,6 +661,28 @@ return view.extend({
 		o.datatype = 'uinteger';
 		o.default = '20000';
 
+		o = sub.option(form.Flag, 'cardinal', _('Cardinal'),
+			_('Automatically hold a client on the preferred band once its signal there has been good for the whole observation window, and release it as soon as the signal drops. A manual band rule of the device always takes priority.'));
+		o.default = '0';
+
+		o = sub.option(form.Value, 'cardinal_window', _('Cardinal observation window'),
+			_('Milliseconds the signal on the preferred band must stay above the weak signal level before the client is held there.'));
+		o.datatype = 'min(10000)';
+		o.default = '300000';
+		o.depends('cardinal', '1');
+
+		o = sub.option(form.Value, 'cardinal_error_max', _('Cardinal weak readings'),
+			_('Consecutive readings below the weak signal level that release the client. A reading below the disconnect threshold releases it at once.'));
+		o.datatype = 'range(1,20)';
+		o.default = '3';
+		o.depends('cardinal', '1');
+
+		o = sub.option(form.Value, 'cardinal_delta', _('Cardinal band estimate'),
+			_('When the preferred band has no fresh measurement, its signal is estimated from the other band with this offset in dB.'));
+		o.datatype = 'range(0,60)';
+		o.default = '20';
+		o.depends('cardinal', '1');
+
 		o = sub.option(form.ListValue, 'log_level', _('Log level'));
 		o.value('0', _('Errors only'));
 		o.value('1', _('Normal'));

@@ -49,7 +49,9 @@ enum mesh_event_type {
 	MESH_EV_STEER,
 	MESH_EV_KICK,
 	MESH_EV_DENY_NODE,
-	MESH_EV_DENY_BAND
+	MESH_EV_DENY_BAND,
+	MESH_EV_CARDINAL_ON,
+	MESH_EV_CARDINAL_OFF
 };
 
 struct mesh_event {
@@ -399,6 +401,9 @@ void mesh_assoc_blob(struct blob_buf *b, const struct mesh_assoc *a);
 void mesh_clients_dump(struct blob_buf *b);
 unsigned int mesh_clients_count(void);
 unsigned int mesh_clients_local(void);
+typedef void (*mesh_client_cb)(const uint8_t *addr, const char *mac, const char *node,
+			       const int *sig, const uint32_t *sig_age, void *priv);
+void mesh_clients_each(mesh_client_cb cb, void *priv);
 bool mesh_client_forget(const char *mac);
 void mesh_clients_load(void);
 void mesh_clients_save(void);

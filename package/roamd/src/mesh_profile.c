@@ -37,7 +37,7 @@ const char *const mesh_policy_opts[] = {
 	"rssi_good", "rssi_low", "rssi_diff", "node_rssi_diff", "kick_rssi",
 	"hold_time", "age_time", "check_time_low", "check_time_high", "poll_interval",
 	"deny_time", "deny_probe", "allow_kick", "steer_retries", "beacon_req_interval",
-	"log_level", NULL
+	"log_level", "cardinal", "cardinal_window", "cardinal_error_max", "cardinal_delta", NULL
 };
 
 const char *const mesh_backhaul_opts[] = {

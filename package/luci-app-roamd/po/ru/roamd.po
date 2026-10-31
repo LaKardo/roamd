@@ -1316,3 +1316,36 @@ msgstr "SSH не поднялся после перезапуска"
 
 msgid "SSH is limited to the lan interface — it will be opened during capture"
 msgstr "SSH ограничен интерфейсом lan — будет открыт при захвате"
+
+msgid "held on the preferred band"
+msgstr "удержание на предпочитаемом диапазоне"
+
+msgid "released from the preferred band"
+msgstr "снятие удержания"
+
+msgid "Cardinal holds this device on %s GHz while its signal there stays good. A manual band rule takes priority."
+msgstr "Кардинал удерживает устройство в диапазоне %s ГГц, пока сигнал там хороший. Ручное правило диапазона важнее."
+
+msgid "Cardinal"
+msgstr "Кардинал"
+
+msgid "Automatically hold a client on the preferred band once its signal there has been good for the whole observation window, and release it as soon as the signal drops. A manual band rule of the device always takes priority."
+msgstr "Автоматически закреплять клиента в предпочитаемом диапазоне, если сигнал там был хорошим всё окно наблюдения, и снимать закрепление, как только сигнал падает. Ручное правило диапазона у устройства всегда важнее."
+
+msgid "Cardinal observation window"
+msgstr "Окно наблюдения Кардинала"
+
+msgid "Milliseconds the signal on the preferred band must stay above the weak signal level before the client is held there."
+msgstr "Сколько миллисекунд сигнал в предпочитаемом диапазоне должен держаться выше уровня слабого сигнала, прежде чем клиента закрепят там."
+
+msgid "Cardinal weak readings"
+msgstr "Слабых замеров для снятия"
+
+msgid "Consecutive readings below the weak signal level that release the client. A reading below the disconnect threshold releases it at once."
+msgstr "Сколько замеров подряд ниже уровня слабого сигнала снимают закрепление. Один замер ниже порога отключения снимает его сразу."
+
+msgid "Cardinal band estimate"
+msgstr "Поправка оценки диапазона"
+
+msgid "When the preferred band has no fresh measurement, its signal is estimated from the other band with this offset in dB."
+msgstr "Если свежего замера в предпочитаемом диапазоне нет, сигнал там оценивается по другому диапазону с этой поправкой в дБ."
