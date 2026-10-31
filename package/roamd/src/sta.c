@@ -8,6 +8,7 @@
 
 #define STA_FLAP_LIMIT	2
 #define STA_FLAP_PAUSE	900000
+#define STA_PROBE_MAX	1024
 
 struct avl_tree roam_sta_tree;
 uint64_t roam_now;
@@ -111,7 +112,17 @@ static void sta_band_seen(struct roam_sta *sta, enum roam_band band, int signal)
 
 void roam_sta_event(struct roam_bss *bss, const uint8_t *addr, int signal)
 {
-	struct roam_sta *sta = roam_sta_get(addr, true);
+	struct roam_sta *sta = roam_sta_get(addr, false);
+
+	if (!sta) {
+		if (roam_sta_tree.count >= STA_PROBE_MAX) {
+			roam_sta_expire();
+			if (roam_sta_tree.count >= STA_PROBE_MAX)
+				return;
+		}
+
+		sta = roam_sta_get(addr, true);
+	}
 
 	if (sta)
 		sta_band_seen(sta, bss->band, signal);
@@ -121,15 +132,15 @@ void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int sign
 {
 	if (sta->bss != bss) {
 		struct roam_bss *prev = sta->bss;
+		bool recent = sta->last_steer && roam_now - sta->last_steer < config.age_time;
 
 		if (prev)
 			mesh_log_local(sta->mac, prev->band, bss->band, NULL, MESH_EV_ROAM);
 		else
 			mesh_log_local(sta->mac, MESH_BAND_NA, bss->band, NULL, MESH_EV_CONNECT);
 
-		if (prev && prev->band != bss->band) {
-			if (sta->last_steer && bss->band == sta->steer_from &&
-			    roam_now - sta->last_steer < config.age_time) {
+		if (sta->has_last_band && sta->last_band != bss->band) {
+			if (recent && bss->band == sta->steer_from) {
 				if (++sta->flap_count >= STA_FLAP_LIMIT) {
 					sta->give_up_until = roam_now + STA_FLAP_PAUSE;
 					roam_log(ROAM_L_INFO,
@@ -143,8 +154,11 @@ void roam_sta_set_connected(struct roam_sta *sta, struct roam_bss *bss, int sign
 		}
 
 		sta->bss = bss;
+		sta->last_band = bss->band;
+		sta->has_last_band = true;
 		sta->connected_since = roam_now;
-		sta->steer_count = 0;
+		if (!recent || bss->band != sta->steer_from)
+			sta->steer_count = 0;
 		sta->beacon_req_silent = 0;
 	}
 

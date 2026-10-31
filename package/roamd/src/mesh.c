@@ -444,8 +444,11 @@ static uint8_t local_band_mask(void)
 
 bool mesh_band_usable(uint8_t bit)
 {
-	if (!bit || mesh.role == MESH_NODE)
+	if (!bit)
 		return true;
+
+	if (mesh.role == MESH_NODE && mesh.enabled)
+		return local_band_mask() & bit;
 
 	return (mesh.band_mask | local_band_mask()) & bit;
 }

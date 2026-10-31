@@ -64,14 +64,19 @@ bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_eve
 		return true;
 
 	want = preferred_band();
-	if (bss->band == want)
+	if (bss->band == want) {
+		sta->band[want == BAND_HIGH ? BAND_LOW : BAND_HIGH].deny_start = 0;
 		return true;
+	}
 
 	pref = &sta->band[want];
 	cur = &sta->band[bss->band];
 
 	if (roam_now < cur->allow_until)
 		return true;
+
+	if (cur->deny_start && roam_now - cur->deny_start > config.deny_time + config.age_time)
+		cur->deny_start = 0;
 
 	if (!pref->present || roam_now - pref->seen > config.check_time[want])
 		goto allow;
@@ -223,13 +228,13 @@ static bool sta_should_leave(struct roam_sta *sta, struct roam_bss *bss,
 	int here = sta->band[bss->band].signal;
 	int there;
 
-	if (here != ROAMD_NO_SIGNAL && here < config.kick_rssi)
-		return true;
-
 	if (!band_info_fresh(&sta->band[target->band], target->band))
 		return false;
 
 	there = sta->band[target->band].signal;
+
+	if (here != ROAMD_NO_SIGNAL && here < config.kick_rssi)
+		return there > here;
 
 	if (here != ROAMD_NO_SIGNAL && there - here >= config.rssi_diff)
 		return true;

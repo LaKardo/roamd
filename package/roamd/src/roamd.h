@@ -158,6 +158,8 @@ struct roam_sta {
 	uint32_t flap_count;
 	uint64_t give_up_until;
 	uint8_t steer_from;
+	uint8_t last_band;
+	bool has_last_band;
 	uint32_t beacon_req_silent;
 	uint8_t dialog_token;
 	bool btm;
