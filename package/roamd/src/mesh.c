@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,6 +8,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <netinet/ether.h>
+#include <arpa/inet.h>
 #include <libubox/uloop.h>
 
 #include <dlfcn.h>
@@ -308,6 +310,113 @@ bool mesh_chain_has(const char *chain, const char *id)
 	return false;
 }
 
+bool mesh_valid_id(const char *s)
+{
+	size_t i;
+
+	if (!s || !s[0] || strlen(s) >= MESH_ID_MAX)
+		return false;
+
+	for (i = 0; s[i]; i++)
+		if (!isalnum((unsigned char)s[i]) && s[i] != '-' && s[i] != '_')
+			return false;
+
+	return true;
+}
+
+bool mesh_valid_task(const char *s)
+{
+	size_t i;
+
+	if (!s || !s[0] || strlen(s) >= 32)
+		return false;
+
+	for (i = 0; s[i]; i++)
+		if (!isdigit((unsigned char)s[i]))
+			return false;
+
+	return true;
+}
+
+bool mesh_valid_mac(const char *s)
+{
+	struct ether_addr ea;
+
+	return s && strlen(s) == 17 && ether_aton_r(s, &ea);
+}
+
+const char *mesh_shq(char *out, size_t len, const char *s)
+{
+	size_t used = 0;
+
+	if (!len)
+		return "";
+
+	for (; s && *s; s++) {
+		const char *piece = *s == '\'' ? "'\\''" : NULL;
+		size_t n = piece ? 4 : 1;
+
+		if (used + n >= len) {
+			used = 0;
+			break;
+		}
+
+		if (piece)
+			memcpy(out + used, piece, n);
+		else
+			out[used] = *s;
+
+		used += n;
+	}
+
+	out[used] = 0;
+
+	return out;
+}
+
+bool mesh_valid_hex(const char *s)
+{
+	size_t i, len = s ? strlen(s) : 0;
+
+	if (!len || len % 2)
+		return false;
+
+	for (i = 0; i < len; i++)
+		if (!isxdigit((unsigned char)s[i]))
+			return false;
+
+	return true;
+}
+
+bool mesh_valid_addr(const char *s)
+{
+	char host[MESH_ADDR_MAX];
+	unsigned char buf[sizeof(struct in6_addr)];
+	const char *zone;
+	size_t i;
+
+	if (!s || !s[0] || strlen(s) >= sizeof(host))
+		return false;
+
+	snprintf(host, sizeof(host), "%s", s);
+	zone = strchr(host, '%');
+	if (zone) {
+		host[zone - host] = 0;
+		zone = s + (zone - host) + 1;
+
+		if (!zone[0] || strlen(zone) >= IFNAMSIZ)
+			return false;
+
+		for (i = 0; zone[i]; i++)
+			if (!isalnum((unsigned char)zone[i]) && !strchr("-_.", zone[i]))
+				return false;
+
+		return inet_pton(AF_INET6, host, buf) == 1;
+	}
+
+	return inet_pton(AF_INET, host, buf) == 1 || inet_pton(AF_INET6, host, buf) == 1;
+}
+
 uint8_t mesh_band_bit(const char *name)
 {
 	if (!name || !name[0])
@@ -453,6 +562,11 @@ struct mesh_neighbor {
 static struct mesh_neighbor mesh_nbr[MESH_NBR_MAX];
 static unsigned int mesh_nbr_n;
 
+static bool nr_valid(const char *nr)
+{
+	return mesh_valid_hex(nr) && strlen(nr) < sizeof(((struct mesh_neighbor *)0)->nr);
+}
+
 void mesh_neighbors_set(struct blob_attr *arr)
 {
 	enum { N_BSSID, N_SSID, N_NR, __N_MAX };
@@ -476,7 +590,9 @@ void mesh_neighbors_set(struct blob_attr *arr)
 			continue;
 
 		blobmsg_parse(np, __N_MAX, tb, blobmsg_data(cur), blobmsg_data_len(cur));
-		if (!tb[N_BSSID] || !tb[N_NR])
+		if (!tb[N_BSSID] || !tb[N_NR] ||
+		    !mesh_valid_mac(blobmsg_get_string(tb[N_BSSID])) ||
+		    !nr_valid(blobmsg_get_string(tb[N_NR])))
 			continue;
 
 		n = &mesh_nbr[mesh_nbr_n++];

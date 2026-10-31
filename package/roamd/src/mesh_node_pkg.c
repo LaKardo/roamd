@@ -150,8 +150,8 @@ int mesh_node_install(const char *addr, const char *branch, const char *arch, bo
 			char cmd[512];
 
 			snprintf(cmd, sizeof(cmd), "%s; pkg_run %s update >/dev/null 2>&1 && "
-				 "pkg_run %s install roamd >/dev/null 2>&1", pkg_lock,
-				 apk ? "apk" : "opkg", apk ? "apk add" : "opkg");
+				 "pkg_run %s roamd >/dev/null 2>&1", pkg_lock,
+				 apk ? "apk" : "opkg", apk ? "apk add" : "opkg install");
 
 			if (mesh_ssh(addr, cmd, NULL, 0, NODE_SSH_LONG))
 				return MESH_NODE_NO_PACKAGE;

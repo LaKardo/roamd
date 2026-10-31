@@ -168,7 +168,7 @@ unsigned int mesh_networks_collect(void);
 const struct mesh_network *mesh_network_at(unsigned int i);
 const struct mesh_network *mesh_network_by_ssid(const char *ssid);
 const char *mesh_networks_sum(void);
-void mesh_networks_dump(struct blob_buf *b, const char *name);
+void mesh_networks_dump(struct blob_buf *b, const char *name, bool keys);
 bool mesh_networks_apply(struct blob_attr *networks);
 bool mesh_network_flag(const char *ssid, bool roaming);
 
@@ -206,6 +206,8 @@ typedef void (*mesh_pkg_cb)(void *priv, bool ok, char *data, size_t len);
 typedef void (*mesh_pkg_ready)(void *priv, bool ok);
 
 bool mesh_pkg_get(const char *url, const char *path, mesh_pkg_cb cb, void *priv);
+bool mesh_pkg_meta_valid(const struct mesh_pkg_meta *m);
+bool mesh_pkg_word_valid(const char *s);
 bool mesh_pkg_feed_url(const char *branch, const char *arch, char *out, size_t len);
 bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 		      mesh_pkg_ready cb, void *priv);
@@ -283,6 +285,15 @@ int mesh_release_run(const char *id, const char *task);
 int mesh_deps_ensure(bool need_only);
 bool mesh_pkg_probe(const char *url);
 bool mesh_random_hex(char *out, size_t bytes);
+bool mesh_valid_id(const char *s);
+bool mesh_valid_task(const char *s);
+bool mesh_valid_mac(const char *s);
+bool mesh_valid_addr(const char *s);
+bool mesh_valid_hex(const char *s);
+const char *mesh_shq(char *out, size_t len, const char *s);
+extern const char *const mesh_global_opts[];
+extern const char *const mesh_policy_opts[];
+extern const char *const mesh_backhaul_opts[];
 void mesh_ubus_reload(void);
 bool mesh_ubus_call(const char *method, const char *json);
 

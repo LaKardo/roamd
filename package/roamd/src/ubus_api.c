@@ -211,7 +211,6 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 		mesh_deps_blob(&b);
 		blobmsg_add_u8(&b, "backhaul_enabled", mesh.backhaul_enabled);
 		blobmsg_add_string(&b, "backhaul_ssid", mesh.backhaul_ssid);
-		blobmsg_add_string(&b, "backhaul_key", mesh.backhaul_key);
 		blobmsg_add_u8(&b, "wifi_shutdown", mesh.wifi_shutdown);
 		blobmsg_add_u8(&b, "node_ui", mesh.node_ui);
 		blobmsg_add_u32(&b, "backhaul_delta", mesh.backhaul_delta);
@@ -237,7 +236,7 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 		blobmsg_add_string(&b, "controller_id", mesh.controller_id);
 		blobmsg_add_string(&b, "controller_name", mesh.controller_name);
 		blobmsg_add_u32(&b, "controller_clients", mesh_clients_local());
-		mesh_networks_dump(&b, "networks");
+		mesh_networks_dump(&b, "networks", false);
 
 		self = blobmsg_open_table(&b, "self");
 		mesh_self_info(&b);
@@ -351,7 +350,7 @@ static int roamd_mesh_acquire(struct ubus_context *ctx, struct ubus_object *obj,
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_ADDR])
+	if (!tb[MESH_ARG_ADDR] || !mesh_valid_addr(blobmsg_get_string(tb[MESH_ARG_ADDR])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	blob_buf_init(&b, 0);
@@ -370,7 +369,7 @@ static int roamd_mesh_acquire_status(struct ubus_context *ctx, struct ubus_objec
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_TASK])
+	if (!tb[MESH_ARG_TASK] || !mesh_valid_task(blobmsg_get_string(tb[MESH_ARG_TASK])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	blob_buf_init(&b, 0);
@@ -390,7 +389,7 @@ static int roamd_mesh_member_remove(struct ubus_context *ctx, struct ubus_object
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_ID])
+	if (!tb[MESH_ARG_ID] || !mesh_valid_id(blobmsg_get_string(tb[MESH_ARG_ID])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	if (tb[MESH_ARG_RESET] && !strcmp(blobmsg_get_string(tb[MESH_ARG_RESET]), "1")) {
@@ -487,7 +486,7 @@ static int roamd_mesh_member_update(struct ubus_context *ctx, struct ubus_object
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_ID])
+	if (!tb[MESH_ARG_ID] || !mesh_valid_id(blobmsg_get_string(tb[MESH_ARG_ID])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	if (!mesh_member_set(blobmsg_get_string(tb[MESH_ARG_ID]),
@@ -508,7 +507,7 @@ static int roamd_mesh_update(struct ubus_context *ctx, struct ubus_object *obj,
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_ID])
+	if (!tb[MESH_ARG_ID] || !mesh_valid_id(blobmsg_get_string(tb[MESH_ARG_ID])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	blob_buf_init(&b, 0);
@@ -618,7 +617,7 @@ static int roamd_mesh_steer(struct ubus_context *ctx, struct ubus_object *obj,
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_MAC])
+	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	roam_time_update();
@@ -637,7 +636,7 @@ static int roamd_mesh_drop(struct ubus_context *ctx, struct ubus_object *obj,
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_MAC])
+	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	roam_time_update();
@@ -670,7 +669,7 @@ static int roamd_mesh_client_update(struct ubus_context *ctx, struct ubus_object
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_MAC] ||
+	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])) ||
 	    (!tb[MESH_ARG_BAND] && !tb[MESH_ARG_ALIAS] && !tb[MESH_ARG_NODES]))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
@@ -693,7 +692,7 @@ static int roamd_mesh_client_forget(struct ubus_context *ctx, struct ubus_object
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[MESH_ARG_MAC])
+	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	if (!mesh_client_forget(blobmsg_get_string(tb[MESH_ARG_MAC])))
@@ -750,7 +749,8 @@ static int roamd_mesh_log_ingest(struct ubus_context *ctx, struct ubus_object *o
 		return UBUS_STATUS_PERMISSION_DENIED;
 
 	blobmsg_parse(ingest_policy, __INGEST_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[INGEST_ID] || !tb[INGEST_NODE] || !tb[INGEST_EVENTS])
+	if (!tb[INGEST_ID] || !tb[INGEST_NODE] || !tb[INGEST_EVENTS] ||
+	    !mesh_valid_id(blobmsg_get_string(tb[INGEST_ID])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
 	mesh_log_ingest(blobmsg_get_string(tb[INGEST_ID]), blobmsg_get_string(tb[INGEST_NODE]),

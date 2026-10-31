@@ -272,7 +272,7 @@ int mesh_ssh_pass(const char *addr, const char *cmd, char *out, size_t len, int 
 
 bool mesh_scp(const char *src, const char *addr, const char *dst)
 {
-	char target[MESH_ADDR_MAX + 8], cmd[256];
+	char target[MESH_ADDR_MAX + 8], cmd[256], qdst[200];
 	char *argv[RUN_ARGV_MAX];
 	unsigned int n = 0;
 	int fd, rc;
@@ -282,7 +282,7 @@ bool mesh_scp(const char *src, const char *addr, const char *dst)
 		return false;
 
 	snprintf(target, sizeof(target), "%s@%s", SSH_USER, addr);
-	snprintf(cmd, sizeof(cmd), "cat > '%s'", dst);
+	snprintf(cmd, sizeof(cmd), "cat > '%s'", mesh_shq(qdst, sizeof(qdst), dst));
 
 	argv_push(argv, &n, "/usr/bin/ssh");
 	argv_push(argv, &n, "-y");
@@ -302,11 +302,11 @@ bool mesh_scp(const char *src, const char *addr, const char *dst)
 
 bool mesh_scp_from(const char *addr, const char *src, const char *dst)
 {
-	char cmd[256], *data;
+	char cmd[256], qsrc[200], *data;
 	size_t len;
 	FILE *f;
 
-	snprintf(cmd, sizeof(cmd), "cat '%s'", src);
+	snprintf(cmd, sizeof(cmd), "cat '%s'", mesh_shq(qsrc, sizeof(qsrc), src));
 
 	data = calloc(1, 16384);
 	if (!data)

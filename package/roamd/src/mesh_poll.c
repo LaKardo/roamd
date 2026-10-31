@@ -183,7 +183,7 @@ static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client
 			continue;
 
 		mac = attr_str(cur, "mac");
-		if (!mac || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
+		if (!mac || !mesh_valid_mac(mac) || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
 			continue;
 
 		ea = ether_aton(mac);
@@ -221,7 +221,7 @@ static void ap_collect(struct poll_node *n, struct blob_attr *list)
 
 		bssid = attr_str(cur, "bssid");
 		ssid = attr_str(cur, "ssid");
-		if (!bssid || !ssid)
+		if (!bssid || !ssid || !mesh_valid_mac(bssid))
 			continue;
 
 		a = &n->ap[n->n_ap++];
@@ -232,9 +232,24 @@ static void ap_collect(struct poll_node *n, struct blob_attr *list)
 		if (band)
 			snprintf(a->band, sizeof(a->band), "%s", band);
 		nr = attr_str(cur, "nr");
-		if (nr)
+		if (nr && mesh_valid_hex(nr) && strlen(nr) < sizeof(a->nr))
 			snprintf(a->nr, sizeof(a->nr), "%s", nr);
 	}
+}
+
+static bool member_field_reserved(const char *name)
+{
+	static const char *const reserved[] = {
+		"online", "update_available", "consistency", "pkg_source", "issues",
+		"id", "managed", "bh_nodes", "bh_nodes_void"
+	};
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(reserved); i++)
+		if (!strcmp(name, reserved[i]))
+			return true;
+
+	return false;
 }
 
 static void member_file_write(const struct poll_node *n, struct blob_attr *report,
@@ -254,7 +269,8 @@ static void member_file_write(const struct poll_node *n, struct blob_attr *repor
 
 	if (report)
 		blobmsg_for_each_attr(cur, report, rem)
-			blobmsg_add_blob(&b, cur);
+			if (!member_field_reserved(blobmsg_name(cur)))
+				blobmsg_add_blob(&b, cur);
 
 	blobmsg_add_u8(&b, "online", report != NULL);
 
@@ -290,9 +306,13 @@ static void member_file_write(const struct poll_node *n, struct blob_attr *repor
 
 	f = fopen(tmp, "w");
 	if (f) {
-		fputs(json, f);
-		fclose(f);
-		rename(tmp, path);
+		bool ok = fputs(json, f) >= 0;
+
+		ok = !fclose(f) && ok;
+		if (ok)
+			rename(tmp, path);
+		else
+			unlink(tmp);
 	}
 
 	free(json);

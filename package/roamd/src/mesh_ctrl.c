@@ -294,7 +294,7 @@ void mesh_ctrl_acquire_status(const char *task, struct blob_buf *b)
 	void *steps;
 
 	snprintf(path, sizeof(path), "%s/%s", MESH_ACQUIRE_DIR, task);
-	data = mesh_slurp(path, MESH_TASK_MAX);
+	data = mesh_valid_task(task) ? mesh_slurp(path, MESH_TASK_MAX) : NULL;
 	if (!data) {
 		if (running) {
 			void *empty;
@@ -561,7 +561,7 @@ void mesh_member_live(const char *id, struct blob_buf *b)
 	char path[128], *data;
 
 	snprintf(path, sizeof(path), "%s/%s.json", MEMBERS_DIR, id);
-	data = mesh_slurp(path, MESH_REPORT_MAX);
+	data = mesh_valid_id(id) ? mesh_slurp(path, MESH_REPORT_MAX) : NULL;
 	if (data && blobmsg_add_json_from_string(b, data)) {
 		free(data);
 		return;
@@ -632,6 +632,9 @@ bool mesh_member_remove(const char *id)
 	struct uci_session u;
 	struct uci_section *sec;
 	bool removed = false;
+
+	if (!mesh_valid_id(id))
+		return false;
 
 	if (!uci_session_open(&u, "roamd"))
 		return false;

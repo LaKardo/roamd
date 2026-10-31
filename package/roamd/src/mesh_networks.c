@@ -391,7 +391,7 @@ const struct mesh_network *mesh_network_by_ssid(const char *ssid)
 	return ssid ? net_find(ssid) : NULL;
 }
 
-void mesh_networks_dump(struct blob_buf *b, const char *name)
+void mesh_networks_dump(struct blob_buf *b, const char *name, bool keys)
 {
 	void *arr = blobmsg_open_array(b, name);
 	unsigned int i;
@@ -403,7 +403,8 @@ void mesh_networks_dump(struct blob_buf *b, const char *name)
 		blobmsg_add_string(b, "id", n->id);
 		blobmsg_add_string(b, "ssid", n->ssid);
 		blobmsg_add_string(b, "encryption", n->encryption);
-		blobmsg_add_string(b, "key", n->key);
+		if (keys)
+			blobmsg_add_string(b, "key", n->key);
 		blobmsg_add_string(b, "network", n->network);
 		blobmsg_add_u32(b, "bands", n->bands);
 		blobmsg_add_u8(b, "roaming", n->roaming);

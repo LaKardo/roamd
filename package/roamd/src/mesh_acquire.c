@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,6 +154,10 @@ static bool mac_read(struct acquire_ctx *c)
 	if (strlen(out) < 17)
 		return false;
 
+	out[17] = 0;
+	if (!mesh_valid_mac(out))
+		return false;
+
 	snprintf(c->mac, sizeof(c->mac), "%.17s", out);
 	snprintf(c->member_id, sizeof(c->member_id), "%c%c%c%c%c%c",
 		 out[9], out[10], out[12], out[13], out[15], out[16]);
@@ -296,7 +301,7 @@ static int node_clock(struct acquire_ctx *c)
 static int enroll_role(struct acquire_ctx *c)
 {
 	char payload[PAYLOAD_MAX];
-	char cname[MESH_NAME_MAX] = "";
+	char cname[MESH_NAME_MAX] = "", qname[MESH_NAME_MAX * 4];
 	struct uci_session u;
 	struct uci_section *s;
 
@@ -330,7 +335,7 @@ static int enroll_role(struct acquire_ctx *c)
 		 "/etc/init.d/rpcd reload >/dev/null 2>&1\n"
 		 "/etc/init.d/roamd enable >/dev/null 2>&1\n"
 		 "/etc/init.d/roamd restart >/dev/null 2>&1\n",
-		 mesh.controller_id, cname, c->caddr, c->member_id);
+		 mesh.controller_id, mesh_shq(qname, sizeof(qname), cname), c->caddr, c->member_id);
 
 	return mesh_ssh(c->addr, payload, NULL, 0, SSH_LONG);
 }
@@ -414,8 +419,15 @@ static int enroll_channel(struct acquire_ctx *c, const char *token)
 
 	if (p) {
 		size_t len = strcspn(p, " ");
+		size_t i;
 
 		snprintf(px5g, sizeof(px5g), "%.*s", (int)len, p);
+
+		for (i = 0; px5g[i]; i++)
+			if (!isalnum((unsigned char)px5g[i]) && px5g[i] != '-') {
+				px5g[0] = 0;
+				break;
+			}
 	}
 
 	snprintf(payload, sizeof(payload),
@@ -450,7 +462,8 @@ static int enroll_channel(struct acquire_ctx *c, const char *token)
 
 static void enroll_key(struct acquire_ctx *c)
 {
-	char pubkey[MESH_PUBKEY_MAX], payload[PAYLOAD_MAX], cmd[MESH_PUBKEY_MAX * 3 + 256];
+	char pubkey[MESH_PUBKEY_MAX], qkey[MESH_PUBKEY_MAX * 4], payload[PAYLOAD_MAX];
+	char cmd[MESH_PUBKEY_MAX * 12 + 256];
 	bool installed = false;
 	unsigned int k;
 
@@ -458,11 +471,12 @@ static void enroll_key(struct acquire_ctx *c)
 		if (!mesh_ssh_pubkey(k, pubkey, sizeof(pubkey)))
 			continue;
 
+		mesh_shq(qkey, sizeof(qkey), pubkey);
 		snprintf(cmd, sizeof(cmd),
 			 "mkdir -p /etc/dropbear; grep -qxF '%s' /etc/dropbear/authorized_keys 2>/dev/null || "
 			 "printf '%%s\\n' '%s' >> /etc/dropbear/authorized_keys; "
 			 "chmod 600 /etc/dropbear/authorized_keys; "
-			 "grep -qxF '%s' /etc/dropbear/authorized_keys", pubkey, pubkey, pubkey);
+			 "grep -qxF '%s' /etc/dropbear/authorized_keys", qkey, qkey, qkey);
 
 		if (!mesh_ssh(c->addr, cmd, NULL, 0, SSH_SHORT))
 			installed = true;
@@ -507,6 +521,10 @@ int mesh_acquire_run(const char *addr, const char *task, bool reset)
 	int rc, waited;
 
 	mesh_task_open(task);
+
+	if (!mesh_valid_addr(addr))
+		return fail(&c, "probe", "the device address is malformed");
+
 	snprintf(c.addr, sizeof(c.addr), "%s", addr);
 
 	mesh_ssh_key_ensure();

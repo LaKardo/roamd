@@ -840,10 +840,14 @@ function nameCell(m) {
 }
 
 function refreshNodes() {
-	return common.meshStatus().then(function(fresh) {
-		var pane = document.getElementById('mesh-nodes-pane');
+	uci.unload('roamd');
 
-		fresh = fresh || {};
+	return Promise.all([
+		common.meshStatus(),
+		uci.load('roamd').catch(function() { return null; })
+	]).then(function(res) {
+		var pane = document.getElementById('mesh-nodes-pane');
+		var fresh = res[0] || {};
 
 		if (pane)
 			dom.content(pane, renderNodes(fresh));
@@ -1823,7 +1827,8 @@ function renderSettings(state) {
 			if (inputs[key].value !== synced[key])
 				return;
 
-			inputs[key].value = form[key] = synced[key] = fresh[key] || '';
+			inputs[key].value = form[key] = synced[key] =
+				(key === 'backhaul_key' ? uci.get('roamd', 'mesh', 'backhaul_key') : fresh[key]) || '';
 		});
 	};
 
@@ -1935,7 +1940,16 @@ function renderController(state) {
 
 return view.extend({
 	load: function() {
-		return common.meshStatus().catch(function() { return {}; });
+		return Promise.all([
+			common.meshStatus().catch(function() { return {}; }),
+			uci.load('roamd').catch(function() { return null; })
+		]).then(function(res) {
+			var state = res[0] || {};
+
+			state.backhaul_key = uci.get('roamd', 'mesh', 'backhaul_key') || '';
+
+			return state;
+		});
 	},
 
 	render: function(state) {

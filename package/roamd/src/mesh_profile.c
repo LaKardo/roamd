@@ -28,17 +28,33 @@ struct profile_member {
 	struct blob_buf doc;
 };
 
-static const char *const global_opts[] = {
+const char *const mesh_global_opts[] = {
 	"mobility_domain", "band_steering", "prefer_band", "fast_transition",
-	"ft_over_ds", "neighbor_reports", "bss_transition"
+	"ft_over_ds", "neighbor_reports", "bss_transition", NULL
 };
 
-static const char *const policy_opts[] = {
+const char *const mesh_policy_opts[] = {
 	"rssi_good", "rssi_low", "rssi_diff", "node_rssi_diff", "kick_rssi",
 	"hold_time", "age_time", "check_time_low", "check_time_high", "poll_interval",
 	"deny_time", "deny_probe", "allow_kick", "steer_retries", "beacon_req_interval",
-	"log_level"
+	"log_level", NULL
 };
+
+const char *const mesh_backhaul_opts[] = {
+	"backhaul_enabled", "backhaul_ssid", "backhaul_key", "ft_key", "ft_kh",
+	"wifi_shutdown", "node_ui", "controller_mac", "backhaul_delta",
+	"backhaul_min_signal", "backhaul_parents", "bh_limits", NULL
+};
+
+static unsigned int opts_count(const char *const *opts)
+{
+	unsigned int n = 0;
+
+	while (opts[n])
+		n++;
+
+	return n;
+}
 
 static const char *root_str(struct blob_buf *doc, const char *name)
 {
@@ -529,12 +545,12 @@ void mesh_profile_build(struct blob_buf *b)
 
 	blobmsg_add_string(b, "controller_id", mesh.controller_id);
 	blobmsg_add_string(b, "networks_sum", mesh_networks_sum());
-	mesh_networks_dump(b, "networks");
+	mesh_networks_dump(b, "networks", true);
 
 	system_dump(b);
 	credentials_dump(b);
-	opts_dump(b, "global", global_opts, ARRAY_SIZE(global_opts));
-	opts_dump(b, "policy", policy_opts, ARRAY_SIZE(policy_opts));
+	opts_dump(b, "global", mesh_global_opts, opts_count(mesh_global_opts));
+	opts_dump(b, "policy", mesh_policy_opts, opts_count(mesh_policy_opts));
 
 	t = blobmsg_open_table(b, "backhaul");
 	blobmsg_add_string(b, "backhaul_enabled", mesh.backhaul_enabled ? "1" : "0");
