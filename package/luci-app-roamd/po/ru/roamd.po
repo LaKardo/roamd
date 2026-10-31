@@ -1298,3 +1298,21 @@ msgstr "Подготовка"
 
 msgid "dBm"
 msgstr "дБм"
+
+msgid "opening SSH"
+msgstr "открытие SSH"
+
+msgid "opening SSH on all interfaces through the web interface"
+msgstr "открываю SSH на всех интерфейсах через веб-интерфейс"
+
+msgid "SSH is open"
+msgstr "SSH открыт"
+
+msgid "SSH is closed and could not be opened through the web interface"
+msgstr "SSH закрыт, и открыть его через веб-интерфейс не удалось"
+
+msgid "SSH did not come up after the restart"
+msgstr "SSH не поднялся после перезапуска"
+
+msgid "SSH is limited to the lan interface — it will be opened during capture"
+msgstr "SSH ограничен интерфейсом lan — будет открыт при захвате"

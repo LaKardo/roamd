@@ -220,6 +220,15 @@ bool mesh_pkg_download(const char *branch, const char *arch, const char *name,
 		       mesh_pkg_ready cb, void *priv);
 
 bool mesh_port_open(const char *addr, uint16_t port, int timeout_ms);
+int mesh_http_ubus(const char *addr, const char *sid, const char *object, const char *method,
+		   const char *args, struct blob_buf *doc, struct blob_attr **data,
+		   int timeout_ms);
+bool mesh_http_login(const char *addr, char *sid, size_t len, int timeout_ms);
+int mesh_http_dropbear_iface(const char *addr, const char *sid, char *sections, size_t len,
+			     int timeout_ms);
+char *mesh_http_file_read(const char *addr, const char *sid, const char *path, int timeout_ms);
+char *mesh_http_board(const char *addr, const char *sid, int timeout_ms);
+bool mesh_http_ssh_open(const char *addr, int timeout_ms);
 int mesh_run(char *const argv[], int in_fd, char *out, size_t len, int timeout_ms);
 int mesh_ssh(const char *addr, const char *cmd, char *out, size_t len, int timeout_ms);
 int mesh_ssh_pass(const char *addr, const char *cmd, char *out, size_t len, int timeout_ms);

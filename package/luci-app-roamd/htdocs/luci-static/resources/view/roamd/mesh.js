@@ -292,7 +292,11 @@ var ACQUIRE_MSG = [
 	[ /^installing packages on the controller$/, function() { return _('installing the packages'); } ],
 	[ /^package index is not available$/, function() { return _('the package index is not available'); } ],
 	[ /^package installation failed$/, function() { return _('the packages could not be installed'); } ],
-	[ /^wpad: (.+)$/, function(m) { return m[1]; } ]
+	[ /^wpad: (.+)$/, function(m) { return m[1]; } ],
+	[ /^opening SSH on all interfaces$/, function() { return _('opening SSH on all interfaces through the web interface'); } ],
+	[ /^SSH is open$/, function() { return _('SSH is open'); } ],
+	[ /^SSH is closed and the web interface refused to open it$/, function() { return _('SSH is closed and could not be opened through the web interface'); } ],
+	[ /^SSH did not come up after the restart$/, function() { return _('SSH did not come up after the restart'); } ]
 ];
 
 function acquireMsgText(msg) {
@@ -310,6 +314,7 @@ function acquireMsgText(msg) {
 }
 
 var ACQUIRE_STEP = {
+	access: _('opening SSH'),
 	check: _('checking for updates'),
 	probe: _('checking the device'),
 	reset: _('resetting the device'),
@@ -419,6 +424,10 @@ function renderCandidate(c) {
 		lines.push(E('div', { 'style': 'color:#c60' }, E('small', {},
 			[ PKG_STATE_TEXT.conflict.format(c.conflict) ])));
 
+	if (c.ssh_lan_only)
+		lines.push(E('div', { 'style': 'color:#c60' }, E('small', {},
+			_('SSH is limited to the lan interface — it will be opened during capture'))));
+
 	var action = E('button', {
 		'class': 'btn cbi-button cbi-button-action',
 		'disabled': ready ? null : 'disabled',
@@ -494,7 +503,9 @@ function acquireProgress(steps, kind) {
 	var failed = null;
 
 	steps.forEach(function(s) {
-		if (order.indexOf(s.step) < 0)
+		if (s.step === 'access' && order.indexOf('access') < 0)
+			order.unshift('access');
+		else if (order.indexOf(s.step) < 0)
 			order.splice(order.length - 1, 0, s.step);
 
 		state[s.step] = s;
@@ -529,7 +540,7 @@ function acquireProgress(steps, kind) {
 		return E('div', {
 			'style': s.status === 'error' ? 'color:#c33'
 				: (state[step] ? '' : 'color:#999')
-		}, '%s %s — %s'.format(mark, acquireStepText(step), text));
+		}, [ '%s %s — %s'.format(mark, acquireStepText(step), text) ]);
 	});
 }
 

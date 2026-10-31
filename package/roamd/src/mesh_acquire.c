@@ -19,6 +19,7 @@
 #define RESET_BACK_WAIT		240
 #define RESET_PROBE_TIMEOUT	10000
 #define PAYLOAD_MAX	8192
+#define ACCESS_WAIT	30
 
 static const char pkg_lock[] =
 	"pkg_run() { ( exec 9>/tmp/roamd-pkg.lock; w=0; until flock -n 9; do "
@@ -70,6 +71,42 @@ static void uplink_probe(const char *addr, char *out, size_t len)
 		snprintf(out, len,
 			 "ip -o -4 addr show 2>/dev/null | "
 			 "awk -v a='%s/' 'index($4, a) == 1 { print $2; exit }'", bare);
+}
+
+static bool ssh_wait(const char *addr)
+{
+	int waited;
+
+	for (waited = 0; waited < ACCESS_WAIT; waited += 2) {
+		if (mesh_port_open(addr, 22, 2000))
+			return true;
+
+		sleep(2);
+	}
+
+	return false;
+}
+
+static bool ssh_access(struct acquire_ctx *c)
+{
+	if (mesh_port_open(c->addr, 22, 3000))
+		return true;
+
+	mesh_task_report(c->task, "access", "progress", "opening SSH on all interfaces");
+
+	if (!mesh_http_ssh_open(c->addr, SSH_SHORT)) {
+		fail(c, "access", "SSH is closed and the web interface refused to open it");
+		return false;
+	}
+
+	if (!ssh_wait(c->addr)) {
+		fail(c, "access", "SSH did not come up after the restart");
+		return false;
+	}
+
+	mesh_task_report(c->task, "access", "ok", "SSH is open");
+
+	return true;
 }
 
 static bool board_read(struct acquire_ctx *c)
@@ -227,6 +264,9 @@ static bool factory_reset(struct acquire_ctx *c)
 	for (waited = 0; waited < RESET_BACK_WAIT; waited += 10) {
 		sleep(10);
 
+		if (!mesh_port_open(back, 22, 2000) && mesh_http_ssh_open(back, SSH_SHORT))
+			ssh_wait(back);
+
 		if (mesh_ssh(back, "exit 0", NULL, 0, RESET_PROBE_TIMEOUT))
 			continue;
 
@@ -323,6 +363,10 @@ static int enroll_role(struct acquire_ctx *c)
 		 "sed -n 's/^wireless\\.\\(mesh_bh_[a-z0-9_]*\\)=wifi-iface$/\\1/p'); do "
 		 "uci -q delete wireless.$sect; done\n"
 		 "uci -q commit wireless\n"
+		 "for sect in $(uci -q show dropbear | "
+		 "sed -n 's/^dropbear\\.\\([^.]*\\)\\.Interface=.*/\\1/p'); do "
+		 "uci -q delete dropbear.$sect.Interface; done\n"
+		 "uci -q commit dropbear\n"
 		 "uci -q delete roamd.mesh.backhaul_ssid\n"
 		 "uci -q delete roamd.mesh.backhaul_key\n"
 		 "uci set roamd.mesh.role='node'\n"
@@ -529,6 +573,9 @@ int mesh_acquire_run(const char *addr, const char *task, bool reset)
 
 	mesh_ssh_key_ensure();
 	mesh_node_forget(c.addr);
+
+	if (!ssh_access(&c))
+		return 1;
 
 	if (!board_read(&c))
 		return fail(&c, "probe", "SSH root without a password is not available");
