@@ -131,6 +131,38 @@ static bool service_off(const char *name)
 	return changed;
 }
 
+/*
+ * The controller reaches the node over https only. Some firmware (ImmortalWrt)
+ * ships uhttpd without listen_https, so the certificate set at capture is
+ * never served; add the listeners if they are missing.
+ */
+static void node_https(void)
+{
+	struct uci_session u;
+	struct uci_section *s;
+	const char *cert;
+	bool changed;
+
+	if (!uci_session_open(&u, "uhttpd"))
+		return;
+
+	s = uci_lookup_section(u.ctx, u.pkg, "main");
+	cert = s ? uci_lookup_option_string(u.ctx, s, "cert") : NULL;
+	if (cert && !strcmp(cert, "/etc/roamd-node.crt") && !uci_lookup_option(u.ctx, s, "listen_https")) {
+		uci_session_add_list(&u, "main", "listen_https", "0.0.0.0:443");
+		uci_session_add_list(&u, "main", "listen_https", "[::]:443");
+	}
+
+	changed = u.dirty;
+	uci_session_close(&u);
+
+	if (changed) {
+		roam_log(ROAM_L_INFO, "mesh: uhttpd had no https listener, enabled port 443");
+		if (system("/etc/init.d/uhttpd restart >/dev/null 2>&1"))
+			roam_log(ROAM_L_INFO, "mesh: uhttpd restart failed");
+	}
+}
+
 void mesh_node_dumbap(void)
 {
 	static const char *const services[] = { "dnsmasq", "odhcpd" };
@@ -152,6 +184,8 @@ void mesh_node_dumbap(void)
 
 	if (mesh.role != MESH_NODE)
 		return;
+
+	node_https();
 
 	if (uci_session_open(&u, "dhcp")) {
 		for (i = 0; i < ARRAY_SIZE(wanted); i++)
