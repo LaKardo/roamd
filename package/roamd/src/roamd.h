@@ -176,6 +176,7 @@ struct roam_sta {
 	uint8_t last_band;
 	bool has_last_band;
 	uint32_t beacon_req_silent;
+	uint32_t poll_mark;
 	uint8_t dialog_token;
 	bool btm;
 	bool rrm;

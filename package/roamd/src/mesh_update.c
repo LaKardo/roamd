@@ -309,7 +309,7 @@ static void daemon_restart(void)
 
 static bool self_install(const char *branch, const char *arch, const char *name)
 {
-	char path[256], cmd[320];
+	char path[256], cmd[384];
 	char *argv[8];
 	unsigned int n = 0;
 
@@ -319,9 +319,11 @@ static bool self_install(const char *branch, const char *arch, const char *name)
 
 	if (mesh_sys_apk())
 		snprintf(cmd, sizeof(cmd),
-			 "apk add --allow-untrusted --repositories-file /dev/null '%s'", path);
+			 "ROAMD_NO_RESTART=1 apk add --allow-untrusted --repositories-file /dev/null '%s'",
+			 path);
 	else
-		snprintf(cmd, sizeof(cmd), "opkg install --force-reinstall '%s'", path);
+		snprintf(cmd, sizeof(cmd), "ROAMD_NO_RESTART=1 opkg install --force-reinstall '%s'",
+			 path);
 
 	argv[n++] = "/bin/sh";
 	argv[n++] = "-c";

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.3.3-r1
+PKG_VERSION:=1.3.4-r1
 PKG_RELEASE:=
 
 PKG_LICENSE:=Apache-2.0
@@ -39,6 +39,14 @@ endef
 
 define Package/roamd/conffiles
 /etc/config/roamd
+endef
+
+define Package/roamd/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+[ "$${ROAMD_NO_RESTART}" = 1 ] && exit 0
+/etc/init.d/roamd enabled && /etc/init.d/roamd restart >/dev/null 2>&1
+exit 0
 endef
 
 define Build/Prepare

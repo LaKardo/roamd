@@ -186,6 +186,8 @@ static bool client_rrm_beacon(struct blob_attr *client, uint8_t *modes)
 	return !!*modes;
 }
 
+static uint32_t clients_mark;
+
 static void client_update(struct roam_bss *bss, struct blob_attr *client, const char *mac)
 {
 	enum {
@@ -219,6 +221,7 @@ static void client_update(struct roam_bss *bss, struct blob_attr *client, const 
 	if (tb[CL_SIGNAL])
 		signal = (int32_t)blobmsg_get_u32(tb[CL_SIGNAL]);
 
+	sta->poll_mark = clients_mark;
 	sta->btm = client_ext_capa_btm(client);
 	sta->rrm = client_rrm_beacon(client, &sta->rrm_modes);
 	sta->band[bss->band].ht = tb[CL_HT] && blobmsg_get_u8(tb[CL_HT]);
@@ -231,14 +234,26 @@ static void clients_cb(struct ubus_request *req, int type, struct blob_attr *msg
 	static const struct blobmsg_policy policy = { "clients", BLOBMSG_TYPE_TABLE };
 	struct roam_bss *bss = req->priv;
 	struct blob_attr *list = NULL, *cur;
+	struct roam_sta *sta;
 	int rem;
 
 	blobmsg_parse(&policy, 1, &list, blob_data(msg), blob_len(msg));
 	if (!list)
 		return;
 
+	if (!++clients_mark)
+		clients_mark++;
+
 	blobmsg_for_each_attr(cur, list, rem)
 		client_update(bss, cur, blobmsg_name(cur));
+
+	/*
+	 * hostapd does not always send a disassoc notification (a deauth after a
+	 * failed handshake, for one); a client missing from the list is gone.
+	 */
+	avl_for_each_element(&roam_sta_tree, sta, avl)
+		if (sta->bss == bss && sta->poll_mark != clients_mark)
+			roam_sta_disconnected(sta);
 }
 
 static void nr_own_cb(struct ubus_request *req, int type, struct blob_attr *msg)
