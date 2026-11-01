@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=roamd
-PKG_VERSION:=1.3.5-r1
+PKG_VERSION:=1.3.6-r1
 PKG_RELEASE:=
 
 PKG_LICENSE:=Apache-2.0
@@ -44,6 +44,12 @@ endef
 define Package/roamd/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+for o in cardinal cardinal_window cardinal_error_max cardinal_delta; do
+	uci -q delete roamd.policy.$$o
+done
+[ "$$(uci -q get roamd.policy.beacon_poll_interval)" = 60000 ] &&
+	uci -q set roamd.policy.beacon_poll_interval=0
+uci -q commit roamd
 [ "$${ROAMD_NO_RESTART}" = 1 ] && exit 0
 /etc/init.d/roamd enabled && /etc/init.d/roamd restart >/dev/null 2>&1
 exit 0

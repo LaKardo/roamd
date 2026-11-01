@@ -1,6 +1,6 @@
 # Сборка и выпуск
 
-> Документация для версии **roamd 1.3.5-r1** (веб-интерфейс **luci-app-roamd 1.3.5-r1**).
+> Документация для версии **roamd 1.3.6-r1** (веб-интерфейс **luci-app-roamd 1.3.6-r1**).
 >
 > Проект передан [freenetic](https://github.com/unisequence/freenetic) — дальнейшее
 > развитие идёт в его рамках.
@@ -123,8 +123,8 @@ make package/roamd/compile package/luci-app-roamd/compile -j$(nproc)
 
 | Файл | Строка |
 |---|---|
-| `package/roamd/Makefile` | `PKG_VERSION:=1.3.5-r1` |
-| `package/luci-app-roamd/Makefile` | `PKG_VERSION:=1.3.5-r1`, `PKG_PO_VERSION:=$(PKG_VERSION)` |
+| `package/roamd/Makefile` | `PKG_VERSION:=1.3.6-r1` |
+| `package/luci-app-roamd/Makefile` | `PKG_VERSION:=1.3.6-r1`, `PKG_PO_VERSION:=$(PKG_VERSION)` |
 
 * Пакеты нумеруются независимо: изменился демон — поднимается версия `roamd`,
   изменился интерфейс — `luci-app-roamd`.
@@ -153,7 +153,7 @@ https://github.com/LaKardo/roamd/releases/download/feed-25.12-aarch64_cortex-a53
 
 Эти релизы перезаписываются при каждом выпуске, тег не меняется — адрес у пользователей остаётся
 прежним. Рядом создаётся версионный релиз `v<версия>` со всеми пакетами сразу; имена файлов
-начинаются с ветки и архитектуры (`25.12-aarch64_cortex-a53-roamd-1.3.5-r1.apk`).
+начинаются с ветки и архитектуры (`25.12-aarch64_cortex-a53-roamd-1.3.6-r1.apk`).
 
 При публикации устаревшие пакеты удаляются: в релизе фида — **после** загрузки нового индекса
 (пока он не загружен, роутеры читают старый, и его пакеты должны быть на месте), в версионном
@@ -182,7 +182,7 @@ openssl rsa -in roamd.pem -pubout -out keys/roamd-apk.rsa.pub
 
 `.github/workflows/release.yml` запускается по тегу `v*` или вручную (можно указать ветки через
 пробел). Версия выпуска берётся из тега, при ручном запуске — из строки `version` в самом
-workflow (`1.3.5-r1`); она должна совпадать с `PKG_VERSION`, иначе пакеты уйдут в чужой
+workflow (`1.3.6-r1`); она должна совпадать с `PKG_VERSION`, иначе пакеты уйдут в чужой
 версионный релиз.
 
 | Задача | Действие |

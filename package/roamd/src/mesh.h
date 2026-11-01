@@ -366,6 +366,7 @@ void mesh_backhaul_bss_set(bool up);
 struct mesh_assoc {
 	uint8_t addr[6];
 	uint32_t rate;
+	uint32_t rx_rate;
 	uint32_t width;
 	uint32_t nss;
 	uint32_t connected;

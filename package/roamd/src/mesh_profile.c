@@ -35,10 +35,11 @@ const char *const mesh_global_opts[] = {
 
 const char *const mesh_policy_opts[] = {
 	"rssi_good", "rssi_low", "rssi_diff", "node_rssi_diff", "kick_rssi",
+	"steer_rssi", "steer_rssi_max",
 	"hold_time", "age_time", "check_time_low", "check_time_high", "poll_interval",
-	"deny_time", "deny_probe", "allow_kick", "steer_retries", "beacon_req_interval",
-	"beacon_poll_interval",
-	"log_level", "cardinal", "cardinal_window", "cardinal_error_max", "cardinal_delta", NULL
+	"deny_time", "deny_probe", "steer_deny", "allow_kick", "steer_retries", "beacon_req_interval",
+	"beacon_poll_interval", "beacon_once",
+	"log_level", NULL
 };
 
 const char *const mesh_backhaul_opts[] = {

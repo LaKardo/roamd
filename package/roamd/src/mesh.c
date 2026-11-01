@@ -1265,6 +1265,16 @@ static void assoc_bytes(struct blob_attr *t, uint64_t *out)
 		*out = blobmsg_get_u64(v);
 }
 
+static uint32_t assoc_rate(struct blob_attr *t)
+{
+	static const struct blobmsg_policy rp = { "rate", BLOBMSG_TYPE_INT32 };
+	struct blob_attr *v = NULL;
+
+	blobmsg_parse(&rp, 1, &v, blobmsg_data(t), blobmsg_data_len(t));
+
+	return v ? blobmsg_get_u32(v) : 0;
+}
+
 static void assoc_phy(struct blob_attr *rate, struct mesh_assoc *a)
 {
 	enum { R_RATE, R_MHZ, R_NSS, R_HT, R_VHT, R_HE, __R_MAX };
@@ -1344,6 +1354,8 @@ static void assoc_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 			strncpy(a->enc, ctx->enc, sizeof(a->enc) - 1);
 		if (tb[A_TX])
 			assoc_phy(tb[A_TX], a);
+		if (tb[A_RX])
+			a->rx_rate = assoc_rate(tb[A_RX]);
 		assoc_bytes(tb[A_RX], &a->rx_bytes);
 		assoc_bytes(tb[A_TX], &a->tx_bytes);
 	}
@@ -1562,6 +1574,8 @@ void mesh_assoc_blob(struct blob_buf *b, const struct mesh_assoc *a)
 
 	if (a->rate)
 		blobmsg_add_u32(b, "rate", a->rate);
+	if (a->rx_rate)
+		blobmsg_add_u32(b, "rx_rate", a->rx_rate);
 	if (a->std[0])
 		blobmsg_add_string(b, "std", a->std);
 	if (a->width)

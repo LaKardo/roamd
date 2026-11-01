@@ -2358,8 +2358,8 @@ bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *nei
 	mesh_log_local(sta->mac, sta->bss->band, MESH_BAND_NA, node, MESH_EV_STEER);
 
 	roam_log(ROAM_L_INFO,
-		 "mesh: controller asks %s to move to %s (attempt %u of %u)",
-		 sta->mac, node ? node : "another device",
+		 "mesh: controller asks %s to move to %s at %d dBm (attempt %u of %u)",
+		 sta->mac, node ? node : "another access point", sta->band[sta->bss->band].signal,
 		 sta->steer_count, config.steer_retries);
 
 	return true;

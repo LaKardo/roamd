@@ -3,7 +3,7 @@
 		"description": "Grant access to the Wi-Fi roaming configuration",
 		"read": {
 			"ubus": {
-				"roamd": [ "status", "mesh_status", "mesh_clients", "mesh_role", "mesh_discover", "mesh_acquire_status", "mesh_log", "cardinal" ],
+				"roamd": [ "status", "mesh_status", "mesh_clients", "mesh_role", "mesh_discover", "mesh_acquire_status", "mesh_log" ],
 				"luci-rpc": [ "getHostHints" ],
 				"iwinfo": [ "countrylist" ]
 			},

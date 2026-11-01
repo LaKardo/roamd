@@ -133,6 +133,30 @@ msgstr "Разница между устройствами"
 msgid "Move the client to another device of the Wi-Fi system when that device hears it this many dB better on the same band."
 msgstr "Перевести клиента на другое устройство Wi-Fi-системы, если оно слышит его на столько дБ лучше в том же диапазоне."
 
+msgid "Ask to leave below"
+msgstr "Просить уйти ниже"
+
+msgid "In a Wi-Fi system a client weaker than this is asked to move and picks the access point itself from a short list of the system. After a refusal it is asked again only when the signal drops 5 dB more."
+msgstr "В Wi-Fi-системе клиента слабее этого уровня просят перейти, и он сам выбирает точку из короткого списка системы. После отказа его просят снова, только когда сигнал упадёт ещё на 5 дБ."
+
+msgid "Never move above"
+msgstr "Не трогать выше"
+
+msgid "In a Wi-Fi system a client stronger than this is never moved."
+msgstr "В Wi-Fi-системе клиента сильнее этого уровня никогда не переводят."
+
+msgid "Turn away from places not offered"
+msgstr "Не пускать на непредложенные точки"
+
+msgid "For 15 seconds after a move request the access points that were not offered do not answer the client, so it goes where it was asked to. After 3 attempts it is let in."
+msgstr "15 секунд после просьбы перейти точки, которых не было в списке, не отвечают клиенту, чтобы он ушёл туда, куда просили. После 3 попыток его пускают."
+
+msgid "Ask quiet clients once"
+msgstr "Разово опрашивать молчащих клиентов"
+
+msgid "A client between the two thresholds above that has not scanned for 10 minutes gets one 802.11k request about another access point, at most once per 15 minutes."
+msgstr "Клиент между двумя порогами выше, который не сканировал эфир 10 минут, получает один запрос 802.11k о другой точке, не чаще раза в 15 минут."
+
 msgid "Band difference"
 msgstr "Разница между диапазонами"
 
@@ -668,6 +692,9 @@ msgstr "МГц"
 
 msgid "Mbit/s"
 msgstr "Мбит/с"
+
+msgid "%d Mbit/s to the client, %d Mbit/s from it"
+msgstr "%d Мбит/с к клиенту, %d Мбит/с от него"
 
 msgid "B"
 msgstr "Б"
@@ -1361,33 +1388,6 @@ msgstr "удержание на предпочитаемом диапазоне"
 
 msgid "released from the preferred band"
 msgstr "снятие удержания"
-
-msgid "Cardinal holds this device on %s GHz while its signal there stays good. A manual band rule takes priority."
-msgstr "Кардинал удерживает устройство в диапазоне %s ГГц, пока сигнал там хороший. Ручное правило диапазона важнее."
-
-msgid "Cardinal"
-msgstr "Кардинал"
-
-msgid "Automatically hold a client on the preferred band once its signal there has been good for the whole observation window, and release it as soon as the signal drops. A manual band rule of the device always takes priority."
-msgstr "Автоматически закреплять клиента в предпочитаемом диапазоне, если сигнал там был хорошим всё окно наблюдения, и снимать закрепление, как только сигнал падает. Ручное правило диапазона у устройства всегда важнее."
-
-msgid "Cardinal observation window"
-msgstr "Окно наблюдения Кардинала"
-
-msgid "Milliseconds the signal on the preferred band must stay above the weak signal level before the client is held there."
-msgstr "Сколько миллисекунд сигнал в предпочитаемом диапазоне должен держаться выше уровня слабого сигнала, прежде чем клиента закрепят там."
-
-msgid "Cardinal weak readings"
-msgstr "Слабых замеров для снятия"
-
-msgid "Consecutive readings below the weak signal level that release the client. A reading below the disconnect threshold releases it at once."
-msgstr "Сколько замеров подряд ниже уровня слабого сигнала снимают закрепление. Один замер ниже порога отключения снимает его сразу."
-
-msgid "Cardinal band estimate"
-msgstr "Поправка оценки диапазона"
-
-msgid "When the preferred band has no fresh measurement, its signal is estimated from the other band with this offset in dB."
-msgstr "Если свежего замера в предпочитаемом диапазоне нет, сигнал там оценивается по другому диапазону с этой поправкой в дБ."
 
 msgid "%s GHz radio is down: the channel may be forbidden in region %s"
 msgstr "Радио %s ГГц не работает: возможно, канал запрещён в регионе %s"

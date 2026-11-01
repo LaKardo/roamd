@@ -45,12 +45,16 @@ static const struct opt_desc opts[] = {
 	OPT("apply_wireless", OPT_BOOL, apply_wireless),
 	OPT("allow_kick", OPT_BOOL, allow_kick),
 	OPT("deny_probe", OPT_BOOL, deny_probe),
+	OPT("steer_deny", OPT_BOOL, steer_deny),
+	OPT("beacon_once", OPT_BOOL, beacon_once),
 	OPT("prefer_band", OPT_PREFER, prefer),
 	OPT("mobility_domain", OPT_STR, mobility_domain),
 	OPT("rssi_low", OPT_INT, rssi_low),
 	OPT("rssi_good", OPT_INT, rssi_good),
 	OPT("rssi_diff", OPT_INT, rssi_diff),
 	OPT("node_rssi_diff", OPT_INT, node_rssi_diff),
+	OPT("steer_rssi", OPT_INT, steer_rssi),
+	OPT("steer_rssi_max", OPT_INT, steer_rssi_max),
 	OPT("kick_rssi", OPT_INT, kick_rssi),
 	OPT("hold_time", OPT_U32, hold_time),
 	OPT("age_time", OPT_U32, age_time),
@@ -61,11 +65,7 @@ static const struct opt_desc opts[] = {
 	OPT("steer_retries", OPT_U32, steer_retries),
 	OPT("beacon_req_interval", OPT_U32, beacon_req_interval),
 	OPT("beacon_poll_interval", OPT_U32, beacon_poll_interval),
-	OPT("log_level", OPT_INT, log_level),
-	OPT("cardinal", OPT_BOOL, cardinal),
-	OPT("cardinal_window", OPT_U32, cardinal_window),
-	OPT("cardinal_error_max", OPT_U32, cardinal_error_max),
-	OPT("cardinal_delta", OPT_INT, cardinal_delta)
+	OPT("log_level", OPT_INT, log_level)
 };
 
 #undef OPT
@@ -89,6 +89,8 @@ static void roam_config_init(void)
 	config.rssi_good = -55;
 	config.rssi_diff = 30;
 	config.node_rssi_diff = 12;
+	config.steer_rssi = -73;
+	config.steer_rssi_max = -65;
 	config.kick_rssi = -82;
 
 	config.hold_time = 30000;
@@ -99,13 +101,8 @@ static void roam_config_init(void)
 	config.deny_time = 15000;
 	config.steer_retries = 3;
 	config.beacon_req_interval = 20000;
-	config.beacon_poll_interval = 60000;
+	config.beacon_poll_interval = 0;
 	config.log_level = ROAM_L_INFO;
-
-	config.cardinal = false;
-	config.cardinal_window = 300000;
-	config.cardinal_error_max = 3;
-	config.cardinal_delta = 20;
 }
 
 const char *uci_option_any(struct uci_context *ctx, struct uci_section *s, const char *name)
@@ -233,7 +230,6 @@ static bool device_node_allowed(const struct roam_device *dev, const char *node_
 enum roam_admit roam_admit(const uint8_t *addr, const char *node_id, enum roam_band band)
 {
 	const struct roam_device *dev = avl_find_element(&device_tree, addr, dev, avl);
-	enum roam_band auto_band;
 
 	if (dev && !device_node_allowed(dev, node_id))
 		return ADMIT_DENY_NODE;
@@ -246,11 +242,7 @@ enum roam_admit roam_admit(const uint8_t *addr, const char *node_id, enum roam_b
 		       ADMIT_DENY_BAND : ADMIT_OK;
 	}
 
-	auto_band = cardinal_lock(addr);
-	if (auto_band == BAND_MAX || band == auto_band)
-		return ADMIT_OK;
-
-	return mesh_band_usable(roam_band_bit(auto_band)) ? ADMIT_DENY_BAND : ADMIT_OK;
+	return ADMIT_OK;
 }
 
 static enum roam_lock opt_to_lock(const char *v)
@@ -389,18 +381,14 @@ static void config_sanitize(void)
 		config.rssi_diff = 1;
 	if (config.node_rssi_diff < 1)
 		config.node_rssi_diff = 1;
+	if (config.steer_rssi_max < config.steer_rssi)
+		config.steer_rssi_max = config.steer_rssi;
 	if (config.poll_interval < 500)
 		config.poll_interval = 500;
 	if (config.age_time < config.hold_time)
 		config.age_time = config.hold_time * 3;
 	if (!config.steer_retries)
 		config.steer_retries = 1;
-	if (config.cardinal_window < 10000)
-		config.cardinal_window = 10000;
-	if (!config.cardinal_error_max)
-		config.cardinal_error_max = 1;
-	if (config.cardinal_delta < 0 || config.cardinal_delta > 60)
-		config.cardinal_delta = 20;
 }
 
 bool uci_session_open(struct uci_session *s, const char *package)

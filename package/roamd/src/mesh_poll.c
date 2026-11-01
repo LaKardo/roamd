@@ -95,7 +95,6 @@ static void radio_sig(char *out, size_t len)
 }
 static char profile_sum[MESH_NET_SUM_LEN];
 static void poll_watchdog_cb(struct uloop_timeout *t);
-static void cardinal_push(void);
 static struct uloop_timeout poll_watchdog = { .cb = poll_watchdog_cb };
 
 bool mesh_poll_busy(void)
@@ -545,7 +544,6 @@ static void poll_finish(void)
 	bands_refresh();
 	ft_kh_refresh();
 	steer_round();
-	cardinal_push();
 	{
 		char now[sizeof(poll_radio)];
 
@@ -957,24 +955,6 @@ static void neighbors_push(void)
 	}
 }
 
-static void cardinal_push(void)
-{
-	unsigned int i;
-	char *json;
-
-	cardinal_poll_done();
-
-	json = cardinal_locks_json();
-	if (!json)
-		return;
-
-	for (i = 0; i < n_nodes; i++)
-		if (nodes[i].online && strcmp(nodes[i].id, SELF_ID))
-			member_call(&nodes[i], "mesh_cardinal", json);
-
-	free(json);
-}
-
 static unsigned int neighbor_list(const struct poll_node *best, const uint8_t *addr,
 				  const char *ssid, uint8_t band, char *out, size_t len)
 {
@@ -1004,20 +984,164 @@ static unsigned int neighbor_list(const struct poll_node *best, const uint8_t *a
 	return count;
 }
 
+static const struct poll_meas *meas_find(const struct poll_sta *c, const char *bssid);
+
+#define SYS_LIST_MAX		3
+#define SYS_PREF_HIGH		128
+#define SUBELEM_CAND_PREF	3
+
+struct sys_cand {
+	const char *nr;
+	int signal;
+	bool high;
+	uint8_t pref;
+};
+
+/* Whether the neighbor report element already carries this subelement. */
+static bool nr_has_subelem(const char *nr, unsigned int id)
+{
+	size_t len = strlen(nr), pos = 26;
+	unsigned int sid, slen;
+
+	while (pos + 4 <= len) {
+		if (sscanf(nr + pos, "%2x%2x", &sid, &slen) != 2)
+			return true;
+		if (sid == id)
+			return true;
+		pos += 4 + slen * 2;
+	}
+
+	return false;
+}
+
+/* The best the client was heard by a node on a band lately, by probes or its own report. */
+static int heard_signal(const struct poll_sta *c, unsigned int from, unsigned int to,
+			unsigned int node, uint8_t band, const char *bssid)
+{
+	const struct poll_meas *m;
+	int best = ROAMD_NO_SIGNAL;
+	unsigned int k;
+
+	for (k = from; k < to; k++) {
+		const struct poll_sta *s = ref_sta(&refs[k]);
+
+		if (refs[k].node != node || s->client || s->band != band ||
+		    s->signal == ROAMD_NO_SIGNAL)
+			continue;
+
+		if (best == ROAMD_NO_SIGNAL || s->signal > best)
+			best = s->signal;
+	}
+
+	m = meas_find(c, bssid);
+	if (m && (best == ROAMD_NO_SIGNAL || m->signal > best))
+		best = m->signal;
+
+	return best;
+}
+
+static int sys_cand_cmp(const void *a, const void *b)
+{
+	const struct sys_cand *x = a, *y = b;
+
+	return (int)y->pref - (int)x->pref;
+}
+
+/*
+ * The access points of the system the client may use, except the one it is
+ * on, ranked: 5 GHz above 2.4 GHz, then by how well they heard the client.
+ * 2.4 GHz is left out when a 5 GHz access point heard it well enough. The
+ * client picks among them itself.
+ */
+static unsigned int system_list(const struct poll_sta *c, unsigned int home, unsigned int from,
+				unsigned int to, char *out, size_t len)
+{
+	struct sys_cand cand[POLL_NODE_MAX * POLL_AP_MAX];
+	unsigned int i, j, n = 0, count = 0;
+	bool high_ok = false;
+	size_t used = 0;
+
+	out[0] = 0;
+	for (i = 0; i < n_nodes; i++) {
+		const struct poll_node *nd = &nodes[i];
+
+		if (!nd->online)
+			continue;
+
+		for (j = 0; j < nd->n_ap && n < ARRAY_SIZE(cand); j++) {
+			const struct poll_ap *a = &nd->ap[j];
+			uint8_t bit = mesh_band_bit(a->band);
+			enum roam_band rb = mesh_band_from_bit(bit);
+			struct sys_cand *e;
+			int level;
+
+			if (!a->nr[0] || strcmp(a->ssid, c->ssid))
+				continue;
+
+			if (i == home && bit == c->band)
+				continue;
+
+			if (roam_admit(c->addr, nd->id, rb) != ADMIT_OK)
+				continue;
+
+			e = &cand[n++];
+			e->nr = a->nr;
+			e->high = rb == BAND_HIGH;
+			e->signal = heard_signal(c, from, to, i, bit, a->bssid);
+
+			level = e->signal == ROAMD_NO_SIGNAL ? 1 : e->signal + 100;
+			if (level < 1)
+				level = 1;
+			if (level > 100)
+				level = 100;
+			e->pref = (e->high ? SYS_PREF_HIGH : 0) + level;
+
+			if (e->high && e->signal != ROAMD_NO_SIGNAL && e->signal >= config.steer_rssi)
+				high_ok = true;
+		}
+	}
+
+	qsort(cand, n, sizeof(cand[0]), sys_cand_cmp);
+
+	for (i = 0; i < n && count < SYS_LIST_MAX; i++) {
+		const struct sys_cand *e = &cand[i];
+
+		if (high_ok && !e->high)
+			continue;
+
+		if (used + strlen(e->nr) + 10 >= len)
+			break;
+
+		if (nr_has_subelem(e->nr, SUBELEM_CAND_PREF))
+			used += snprintf(out + used, len - used, "%s\"%s\"",
+					 count ? "," : "", e->nr);
+		else
+			used += snprintf(out + used, len - used, "%s\"%s%02x01%02x\"",
+					 count ? "," : "", e->nr, SUBELEM_CAND_PREF, e->pref);
+		count++;
+	}
+
+	return count;
+}
+
 #define STEER_MEMO_MAX		64
 #define STEER_REFUSED_HOLD	1800000
+#define STEER_WEAK_DROP		5
+#define STEER_ANY		"*"
 
 /*
  * What the controller last asked of each client, so that it does not repeat
  * the same move every poll. A sent request waits age_time for the client to
  * leave; a refusal (the node used up its attempts or cannot steer this
- * client) waits until the client reconnects or moves.
+ * client) waits until the client reconnects or moves. A weak client that
+ * refused to leave is asked again once its signal drops by STEER_WEAK_DROP.
  */
 struct steer_memo {
 	uint8_t addr[6];
 	char home[MESH_ID_MAX];
 	char target[MESH_ID_MAX];
 	uint8_t band;
+	int signal;
 	uint32_t connected;
 	uint64_t at;
 	bool refused;
@@ -1026,6 +1150,7 @@ struct steer_memo {
 struct steer_call {
 	uint8_t addr[6];
 	char home[MESH_ID_MAX];
+	char *args;
 };
 
 static struct steer_memo steer_memo[STEER_MEMO_MAX];
@@ -1050,6 +1175,8 @@ static bool steer_memo_holds(const struct poll_sta *c, const char *home, const c
 		return false;
 
 	hold = m->refused ? STEER_REFUSED_HOLD : config.age_time;
+	if (m->refused && !strcmp(target, STEER_ANY))
+		hold = c->signal > m->signal - STEER_WEAK_DROP ? UINT64_MAX : 0;
 
 	if (strcmp(m->home, home) || strcmp(m->target, target) || m->band != c->band ||
 	    c->connected < m->connected || roam_now - m->at >= hold) {
@@ -1077,6 +1204,7 @@ static struct steer_memo *steer_memo_put(const struct poll_sta *c, const char *h
 	snprintf(m->home, sizeof(m->home), "%s", home);
 	snprintf(m->target, sizeof(m->target), "%s", target);
 	m->band = c->band;
+	m->signal = c->signal;
 	m->connected = c->connected;
 	m->at = roam_now ? roam_now : 1;
 	m->refused = false;
@@ -1094,8 +1222,9 @@ static void steer_memo_result(struct steer_memo *m, bool sent, const char *reaso
 	m->refused = true;
 
 	roam_mac_str(m->addr, mac, sizeof(mac));
-	roam_log(ROAM_L_INFO, "mesh: %s did not move %s to %s (%s), not asking again for now",
-		 m->home, mac, m->target, reason ? reason : "no answer");
+	roam_log(ROAM_L_INFO, "mesh: %s did not move %s to %s (%s, %d dBm), not asking again for now",
+		 m->home, mac, strcmp(m->target, STEER_ANY) ? m->target : "another access point",
+		 reason ? reason : "no answer", m->signal);
 }
 
 /* The node reports how the client answered the last move request. */
@@ -1114,6 +1243,19 @@ static void steer_memo_answer(const struct poll_sta *c, const char *home)
 	steer_memo_result(m, false, reason);
 }
 
+/* With steer_deny every device turns the client away from the places it was not offered. */
+static void deny_push(const char *args)
+{
+	unsigned int i;
+
+	if (!config.steer_deny || !strstr(args, "\"neighbors\""))
+		return;
+
+	for (i = 0; i < n_nodes; i++)
+		if (nodes[i].online)
+			member_call(&nodes[i], "mesh_deny", args);
+}
+
 static void steer_call_cb(void *priv, struct blob_attr *result, bool ok)
 {
 	static const struct blobmsg_policy rp[2] = {
@@ -1125,18 +1267,20 @@ static void steer_call_cb(void *priv, struct blob_attr *result, bool ok)
 	struct blob_attr *tb[2] = { NULL, NULL };
 
 	if (m && !strcmp(m->home, sc->home)) {
+		bool sent;
+
 		if (ok && result)
 			blobmsg_parse(rp, 2, tb, blobmsg_data(result), blobmsg_data_len(result));
 
 		/* Nodes before 1.3.1 answer with an empty table on success. */
-		if (ok && !tb[0])
-			steer_memo_result(m, true, NULL);
-		else
-			steer_memo_result(m, tb[0] && blobmsg_get_bool(tb[0]),
-					  tb[1] ? blobmsg_get_string(tb[1]) :
-					  ok ? NULL : "refused or unreachable");
+		sent = (ok && !tb[0]) || (tb[0] && blobmsg_get_bool(tb[0]));
+		steer_memo_result(m, sent, tb[1] ? blobmsg_get_string(tb[1]) :
+				  ok ? NULL : "refused or unreachable");
+		if (sent && sc->args)
+			deny_push(sc->args);
 	}
 
+	free(sc->args);
 	free(sc);
 }
 
@@ -1223,6 +1367,182 @@ static bool meas_pick(const struct poll_sta *c, unsigned int home, const struct 
 	return measured;
 }
 
+#define TRAIL_MAX		64
+#define FIX_INTERVAL		600000
+#define PROBE_INTERVAL		300000
+
+/*
+ * Where each client was before its current place and when it was last moved
+ * by a correction, so that corrections are rare and never send a client back
+ * to the place it just left.
+ */
+static struct client_trail {
+	uint8_t addr[6];
+	char home[MESH_ID_MAX];
+	uint8_t band;
+	char prev[MESH_ID_MAX];
+	uint8_t prev_band;
+	uint64_t seen;
+	uint64_t fix_at;
+	uint64_t probe_at;
+} trail[TRAIL_MAX];
+
+static struct client_trail *trail_get(const struct poll_sta *c, const char *home)
+{
+	struct client_trail *t = NULL, *oldest = &trail[0];
+	unsigned int i;
+
+	for (i = 0; i < TRAIL_MAX; i++) {
+		if (trail[i].seen && !memcmp(trail[i].addr, c->addr, 6)) {
+			t = &trail[i];
+			break;
+		}
+		if (trail[i].seen < oldest->seen)
+			oldest = &trail[i];
+	}
+
+	if (!t) {
+		t = oldest;
+		memset(t, 0, sizeof(*t));
+		memcpy(t->addr, c->addr, 6);
+	} else if (strcmp(t->home, home) || t->band != c->band) {
+		memcpy(t->prev, t->home, sizeof(t->prev));
+		t->prev_band = t->band;
+	}
+
+	snprintf(t->home, sizeof(t->home), "%s", home);
+	t->band = c->band;
+	t->seen = roam_now ? roam_now : 1;
+
+	return t;
+}
+
+static bool trail_left(const struct client_trail *t, const char *node, uint8_t band)
+{
+	return t->prev[0] && !strcmp(t->prev, node) && t->prev_band == band;
+}
+
+/*
+ * The client measured a clearly better access point elsewhere than the one
+ * it chose itself: one request with that single target.
+ */
+static bool fix_pick(const struct poll_sta *c, unsigned int home, const struct client_trail *t,
+		     const struct poll_node **best, uint8_t *best_band, int *best_signal,
+		     int *home_signal)
+{
+	if ((uint64_t)c->connected * 1000 < config.hold_time)
+		return false;
+
+	if (t->fix_at && roam_now - t->fix_at < FIX_INTERVAL)
+		return false;
+
+	if (!meas_pick(c, home, best, best_band, best_signal, home_signal) || !*best)
+		return false;
+
+	return !trail_left(t, (*best)->id, *best_band);
+}
+
+/* Another device hears the client's probes clearly better on the same band. */
+static bool probe_pick(const struct poll_sta *c, unsigned int home, unsigned int from,
+		       unsigned int to, const struct client_trail *t,
+		       const struct poll_node **best, int *best_signal, int *home_signal)
+{
+	enum roam_band rb = mesh_band_from_bit(c->band);
+	unsigned int k;
+
+	if (t->probe_at && roam_now - t->probe_at < PROBE_INTERVAL)
+		return false;
+
+	*best = NULL;
+	*home_signal = c->signal;
+
+	for (k = from; k < to; k++) {
+		const struct poll_sta *s = ref_sta(&refs[k]);
+		const struct poll_node *n = &nodes[refs[k].node];
+
+		if (refs[k].node == home || s->band != c->band || !n->online ||
+		    !node_has_net(n, c->ssid, c->band) ||
+		    roam_admit(c->addr, n->id, rb) != ADMIT_OK)
+			continue;
+
+		if (!*best || s->signal > *best_signal) {
+			*best = n;
+			*best_signal = s->signal;
+		}
+	}
+
+	if (!*best || *best_signal - *home_signal < config.node_rssi_diff)
+		return false;
+
+	return !trail_left(t, (*best)->id, c->band);
+}
+
+static void steer_send(const struct poll_sta *c, unsigned int home, const char *target,
+		       const char *args, struct steer_memo *memo)
+{
+	if (!strcmp(nodes[home].id, SELF_ID)) {
+		static const struct blobmsg_policy np = { "neighbors", BLOBMSG_TYPE_ARRAY };
+		static struct blob_buf sb;
+		const char *reason = NULL;
+		bool sent = false;
+
+		blob_buf_init(&sb, 0);
+		if (blobmsg_add_json_from_string(&sb, args)) {
+			struct blob_attr *tb[1];
+
+			blobmsg_parse(&np, 1, tb, blob_data(sb.head), blob_len(sb.head));
+			sent = mesh_node_steer(c->mac, target, tb[0], &reason);
+		}
+
+		steer_memo_result(memo, sent, reason);
+		if (sent)
+			deny_push(args);
+		return;
+	}
+
+	{
+		struct steer_call *sc = calloc(1, sizeof(*sc));
+
+		if (sc) {
+			memcpy(sc->addr, c->addr, 6);
+			snprintf(sc->home, sizeof(sc->home), "%s", nodes[home].id);
+			if (config.steer_deny)
+				sc->args = strdup(args);
+		}
+
+		if (!mesh_rpc_call(nodes[home].id, nodes[home].addr, "roamd", "mesh_steer", args,
+				   sc ? steer_call_cb : NULL, sc) && sc) {
+			free(sc->args);
+			free(sc);
+		}
+	}
+}
+
+/*
+ * The client is weak where it is: ask it to leave and let it pick the
+ * access point itself from the list of the system.
+ */
+static void steer_weak(const struct poll_sta *c, unsigned int home, unsigned int from,
+		       unsigned int to)
+{
+	char args[1024], list[768];
+	struct steer_memo *memo;
+
+	if (steer_memo_holds(c, nodes[home].id, STEER_ANY))
+		return;
+
+	if (!system_list(c, home, from, to, list, sizeof(list)))
+		return;
+
+	snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"neighbors\":[%s]}", c->mac, list);
+
+	roam_log(ROAM_L_INFO, "mesh: %s is weak on %s (%s GHz, %d dBm), asking it to move",
+		 c->mac, nodes[home].id, roam_band_name(mesh_band_from_bit(c->band)), c->signal);
+
+	memo = steer_memo_put(c, nodes[home].id, STEER_ANY);
+	steer_send(c, home, NULL, args, memo);
+}
+
 static void steer_client(unsigned int from, unsigned int to, unsigned int client)
 {
 	const struct poll_sta *c = ref_sta(&refs[client]);
@@ -1233,15 +1553,42 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 	const struct poll_node *best = NULL;
 	int best_signal = 0, home_signal = 0;
 	char args[1024], list[768];
+	struct client_trail *t;
 	struct steer_memo *memo;
+	bool home_ok, fix = false, probe = false;
 
 	if (!net_roaming(ssid))
 		return;
 
+	t = trail_get(c, nodes[home].id);
 	steer_memo_answer(c, nodes[home].id);
 
 	if (c->btm_paused)
 		return;
+
+	home_ok = roam_admit(c->addr, nodes[home].id, rb) == ADMIT_OK;
+	if (home_ok && c->signal != ROAMD_NO_SIGNAL) {
+		if (c->signal > config.steer_rssi_max)
+			return;
+
+		if (c->signal < config.steer_rssi) {
+			steer_weak(c, home, from, to);
+			return;
+		}
+	}
+
+	if (home_ok) {
+		if (fix_pick(c, home, t, &best, &to_band, &best_signal, &home_signal)) {
+			fix = true;
+			goto steer;
+		}
+		to_band = band;
+		if (probe_pick(c, home, from, to, t, &best, &best_signal, &home_signal)) {
+			probe = true;
+			goto steer;
+		}
+		return;
+	}
 
 	if (meas_pick(c, home, &best, &to_band, &best_signal, &home_signal)) {
 		if (!best)
@@ -1269,8 +1616,7 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 	if (!best || best == &nodes[home])
 		return;
 
-	if (roam_admit(c->addr, nodes[home].id, rb) == ADMIT_OK &&
-	    best_signal - home_signal < config.node_rssi_diff)
+	if (home_ok && best_signal - home_signal < config.node_rssi_diff)
 		return;
 
 steer:
@@ -1278,7 +1624,7 @@ steer:
 		return;
 
 	list[0] = 0;
-	if (!neighbor_list(best, c->addr, ssid, to_band, list, sizeof(list)))
+	if (!neighbor_list(best, c->addr, ssid, to_band, list, sizeof(list)) && !fix)
 		neighbor_list(best, c->addr, ssid, 0, list, sizeof(list));
 
 	if (list[0])
@@ -1288,42 +1634,18 @@ steer:
 		snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"id\":\"%s\"}", mac, best->id);
 
 	roam_log(ROAM_L_INFO,
-		 "mesh: %s is heard better on %s (%s GHz, %d dBm) than on %s (%s GHz, %d dBm), moving",
+		 "mesh: %s is heard better on %s (%s GHz, %d dBm) than on %s (%s GHz, %d dBm), %s",
 		 mac, best->id, roam_band_name(mesh_band_from_bit(to_band)), best_signal,
-		 nodes[home].id, roam_band_name(rb), home_signal);
+		 nodes[home].id, roam_band_name(rb), home_signal,
+		 fix ? "correcting its choice" : "moving");
+
+	if (fix)
+		t->fix_at = roam_now ? roam_now : 1;
+	if (probe)
+		t->probe_at = roam_now ? roam_now : 1;
 
 	memo = steer_memo_put(c, nodes[home].id, best->id);
-
-	if (!strcmp(nodes[home].id, SELF_ID)) {
-		static struct blob_buf sb;
-		const char *reason = NULL;
-		bool sent = false;
-
-		blob_buf_init(&sb, 0);
-		if (blobmsg_add_json_from_string(&sb, args)) {
-			struct blob_attr *tb[1];
-			static const struct blobmsg_policy np = { "neighbors", BLOBMSG_TYPE_ARRAY };
-
-			blobmsg_parse(&np, 1, tb, blob_data(sb.head), blob_len(sb.head));
-			sent = mesh_node_steer(mac, best->id, tb[0], &reason);
-		}
-
-		steer_memo_result(memo, sent, reason);
-		return;
-	}
-
-	{
-		struct steer_call *sc = calloc(1, sizeof(*sc));
-
-		if (sc) {
-			memcpy(sc->addr, c->addr, 6);
-			snprintf(sc->home, sizeof(sc->home), "%s", nodes[home].id);
-		}
-
-		if (!mesh_rpc_call(nodes[home].id, nodes[home].addr, "roamd", "mesh_steer", args,
-				   sc ? steer_call_cb : NULL, sc))
-			free(sc);
-	}
+	steer_send(c, home, best->id, args, memo);
 }
 
 static void steer_round(void)

@@ -97,6 +97,8 @@ struct roam_config {
 	bool apply_wireless;
 	bool allow_kick;
 	bool deny_probe;
+	bool steer_deny;
+	bool beacon_once;
 	enum roam_prefer prefer;
 	char mobility_domain[ROAMD_MDID_LEN + 1];
 
@@ -104,6 +106,8 @@ struct roam_config {
 	int rssi_good;
 	int rssi_diff;
 	int node_rssi_diff;
+	int steer_rssi;
+	int steer_rssi_max;
 	int kick_rssi;
 
 	uint32_t hold_time;
@@ -115,11 +119,6 @@ struct roam_config {
 	uint32_t beacon_req_interval;
 	uint32_t beacon_poll_interval;
 	int log_level;
-
-	bool cardinal;
-	uint32_t cardinal_window;
-	uint32_t cardinal_error_max;
-	int cardinal_delta;
 };
 
 struct roam_bss {
@@ -180,6 +179,8 @@ struct roam_sta {
 	uint64_t connected_since;
 	uint64_t last_steer;
 	uint64_t last_beacon_req;
+	uint64_t last_probe;
+	uint64_t last_once;
 
 	uint32_t steer_count;
 	uint32_t flap_count;
@@ -268,19 +269,13 @@ void roam_sta_reset(struct roam_sta *sta);
 int roam_sta_signal(const struct roam_sta *sta, enum roam_band band);
 int roam_sta_signal_seen(const struct roam_sta *sta, enum roam_band band, uint32_t *age);
 
-void cardinal_init(void);
-enum roam_band cardinal_lock(const uint8_t *addr);
-void cardinal_set_remote(struct blob_attr *locks);
-void cardinal_poll_done(void);
-char *cardinal_locks_json(void);
-void cardinal_dump(struct blob_buf *b);
-
 bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev);
 void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from);
 void roam_policy_run(struct roam_bss *bss);
 bool roam_policy_can_steer(const struct roam_sta *sta);
 uint64_t roam_meas_fresh(void);
 bool roam_policy_btm_paused(const uint8_t *addr);
+void roam_policy_deny(const uint8_t *addr, struct blob_attr *neighbors);
 uint32_t roam_policy_btm_rejects(const uint8_t *addr);
 uint8_t roam_policy_btm_token(struct roam_sta *sta);
 void roam_policy_btm_response(struct roam_sta *sta, struct roam_bss *bss, int token, int status,

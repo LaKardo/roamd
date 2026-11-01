@@ -472,6 +472,8 @@ static int handle_sta_event(struct roam_bss *bss, const char *method, struct blo
 	roam_sta_event(bss, (uint8_t *)ea->ether_addr_octet, signal);
 
 	sta = roam_sta_get((uint8_t *)ea->ether_addr_octet, false);
+	if (sta && ev == EVENT_PROBE)
+		sta->last_probe = roam_now;
 	if (!sta || roam_policy_allow(sta, bss, ev))
 		return 0;
 

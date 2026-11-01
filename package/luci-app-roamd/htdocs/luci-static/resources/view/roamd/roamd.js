@@ -618,6 +618,16 @@ return view.extend({
 		o.datatype = 'range(1,60)';
 		o.default = '30';
 
+		o = sub.option(form.Value, 'steer_rssi', _('Ask to leave below'),
+			_('In a Wi-Fi system a client weaker than this is asked to move and picks the access point itself from a short list of the system. After a refusal it is asked again only when the signal drops 5 dB more.'));
+		o.datatype = 'range(-100,-1)';
+		o.default = '-73';
+
+		o = sub.option(form.Value, 'steer_rssi_max', _('Never move above'),
+			_('In a Wi-Fi system a client stronger than this is never moved.'));
+		o.datatype = 'range(-100,-1)';
+		o.default = '-65';
+
 		o = sub.option(form.Value, 'node_rssi_diff', _('Device difference'),
 			_('Move the client to another device of the Wi-Fi system when that device hears it this many dB better on the same band.'));
 		o.datatype = 'range(1,60)';
@@ -631,6 +641,10 @@ return view.extend({
 		o = sub.option(form.Flag, 'deny_probe', _('Hide the non-preferred band'),
 			_('Do not answer probe and authentication requests on the non-preferred band while the preferred one is good.'));
 		o.default = '1';
+
+		o = sub.option(form.Flag, 'steer_deny', _('Turn away from places not offered'),
+			_('For 15 seconds after a move request the access points that were not offered do not answer the client, so it goes where it was asked to. After 3 attempts it is let in.'));
+		o.default = '0';
 
 		o = sub.option(form.Flag, 'allow_kick', _('Force disconnect'),
 			_('Disconnect clients without 802.11v support when they have to be moved: they cannot be asked to roam, and until this is enabled such a client stays on a dying link until it decides to leave on its own, which can take minutes. Some clients reconnect to the same band.'));
@@ -679,29 +693,11 @@ return view.extend({
 		o = sub.option(form.Value, 'beacon_poll_interval', _('Measurement poll interval'),
 			_('Milliseconds between requests asking an 802.11k client how it hears the access points of the other devices, one access point per request. The controller then moves the client to the best one, also to another band. 0 turns it off.'));
 		o.datatype = 'uinteger';
-		o.default = '60000';
-
-		o = sub.option(form.Flag, 'cardinal', _('Cardinal'),
-			_('Automatically hold a client on the preferred band once its signal there has been good for the whole observation window, and release it as soon as the signal drops. A manual band rule of the device always takes priority.'));
 		o.default = '0';
 
-		o = sub.option(form.Value, 'cardinal_window', _('Cardinal observation window'),
-			_('Milliseconds the signal on the preferred band must stay above the weak signal level before the client is held there.'));
-		o.datatype = 'min(10000)';
-		o.default = '300000';
-		o.depends('cardinal', '1');
-
-		o = sub.option(form.Value, 'cardinal_error_max', _('Cardinal weak readings'),
-			_('Consecutive readings below the weak signal level that release the client. A reading below the disconnect threshold releases it at once.'));
-		o.datatype = 'range(1,20)';
-		o.default = '3';
-		o.depends('cardinal', '1');
-
-		o = sub.option(form.Value, 'cardinal_delta', _('Cardinal band estimate'),
-			_('When the preferred band has no fresh measurement, its signal is estimated from the other band with this offset in dB.'));
-		o.datatype = 'range(0,60)';
-		o.default = '20';
-		o.depends('cardinal', '1');
+		o = sub.option(form.Flag, 'beacon_once', _('Ask quiet clients once'),
+			_('A client between the two thresholds above that has not scanned for 10 minutes gets one 802.11k request about another access point, at most once per 15 minutes.'));
+		o.default = '0';
 
 		o = sub.option(form.ListValue, 'log_level', _('Log level'));
 		o.value('0', _('Errors only'));

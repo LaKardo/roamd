@@ -21,6 +21,7 @@ struct client_rec {
 	char std[8];
 	char enc[16];
 	uint32_t rate;
+	uint32_t rx_rate;
 	uint32_t width;
 	uint32_t nss;
 	uint32_t connected;
@@ -196,6 +197,7 @@ static void refresh_local(uint32_t now)
 		}
 
 		c->connected = a->connected;
+		c->rx_rate = a->rx_rate;
 		c->wired = a->wired;
 		strncpy(c->enc, a->enc, sizeof(c->enc) - 1);
 	}
@@ -275,6 +277,7 @@ static void refresh_member(const char *id, uint32_t now)
 			     num_field(cur, "width"), num_field(cur, "nss"),
 			     num_field(cur, "rx_bytes"), num_field(cur, "tx_bytes"), now);
 		rec->connected = connected;
+		rec->rx_rate = (uint32_t)num_field(cur, "rx_rate");
 		rec->wired = c[CL_WIRED] && blobmsg_get_u8(c[CL_WIRED]);
 		rec->enc[0] = '\0';
 		if (c[CL_ENC])
@@ -634,6 +637,8 @@ void mesh_clients_dump(struct blob_buf *b)
 			blobmsg_add_string(b, "encryption", c->enc);
 		if (c->rate)
 			blobmsg_add_u32(b, "rate", c->rate);
+		if (c->rx_rate)
+			blobmsg_add_u32(b, "rx_rate", c->rx_rate);
 		if (c->width)
 			blobmsg_add_u32(b, "width", c->width);
 		if (c->nss)
@@ -649,8 +654,6 @@ void mesh_clients_dump(struct blob_buf *b)
 			blobmsg_add_string(b, "band_lock", roam_band_name(locked));
 			blobmsg_add_u8(b, "band_lock_active",
 				       mesh_band_usable(roam_band_bit(locked)));
-		} else if (cardinal_lock(c->addr) != BAND_MAX) {
-			blobmsg_add_string(b, "cardinal", roam_band_name(cardinal_lock(c->addr)));
 		}
 
 		if (!c->wired && mesh.role == MESH_CONTROLLER &&

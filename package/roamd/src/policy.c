@@ -82,6 +82,93 @@ static bool band_info_fresh(const struct roam_sta_band *info, enum roam_band ban
 	return roam_now - info->seen <= config.age_time;
 }
 
+#define DENY_SLOTS		16
+#define DENY_ALLOW_MAX		8
+#define DENY_TIME		15000
+#define DENY_TRIES		3
+
+/*
+ * Right after a move request the access points that were not offered turn
+ * the client away for a short while, so that it goes where it was asked to.
+ * A client that keeps knocking is let in after DENY_TRIES attempts.
+ */
+static struct {
+	uint8_t addr[6];
+	uint8_t allow[DENY_ALLOW_MAX][6];
+	unsigned int n_allow;
+	unsigned int tries;
+	uint64_t until;
+} deny[DENY_SLOTS];
+
+void roam_policy_deny(const uint8_t *addr, struct blob_attr *neighbors)
+{
+	unsigned int i, slot = 0;
+	struct blob_attr *cur;
+	int rem;
+
+	for (i = 0; i < DENY_SLOTS; i++) {
+		if (!memcmp(deny[i].addr, addr, 6)) {
+			slot = i;
+			break;
+		}
+		if (deny[i].until < deny[slot].until)
+			slot = i;
+	}
+
+	memset(&deny[slot], 0, sizeof(deny[slot]));
+	memcpy(deny[slot].addr, addr, 6);
+
+	if (neighbors)
+		blobmsg_for_each_attr(cur, neighbors, rem) {
+			const char *nr;
+			uint8_t *a;
+
+			if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING ||
+			    deny[slot].n_allow >= DENY_ALLOW_MAX)
+				continue;
+
+			nr = blobmsg_get_string(cur);
+			if (strlen(nr) < 12)
+				continue;
+
+			a = deny[slot].allow[deny[slot].n_allow];
+			if (sscanf(nr, "%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx",
+				   &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]) == 6)
+				deny[slot].n_allow++;
+		}
+
+	if (deny[slot].n_allow)
+		deny[slot].until = roam_now + DENY_TIME;
+}
+
+static bool deny_holds(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev)
+{
+	unsigned int i, j;
+
+	for (i = 0; i < DENY_SLOTS; i++) {
+		if (!deny[i].until || memcmp(deny[i].addr, sta->addr, 6))
+			continue;
+
+		if (roam_now >= deny[i].until)
+			return false;
+
+		for (j = 0; j < deny[i].n_allow; j++)
+			if (!memcmp(deny[i].allow[j], bss->bssid, 6))
+				return false;
+
+		if (ev != EVENT_PROBE && ++deny[i].tries >= DENY_TRIES) {
+			deny[i].until = 0;
+			roam_log(ROAM_L_INFO, "roamd: %s keeps knocking on %s GHz, letting it in",
+				 sta->mac, roam_band_name(bss->band));
+			return false;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
 bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_event ev)
 {
 	struct roam_sta_band *pref, *cur;
@@ -91,6 +178,9 @@ bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_eve
 		return true;
 
 	if (roam_admit(sta->addr, mesh_self_node_id(), bss->band) != ADMIT_OK)
+		return false;
+
+	if (deny_holds(sta, bss, ev))
 		return false;
 
 	if (ev == EVENT_ASSOC || !roam_bss_target(bss))
@@ -419,8 +509,9 @@ void roam_policy_btm_response(struct roam_sta *sta, struct roam_bss *bss, int to
 	sta->btm_status = status;
 	sta->btm_status_at = roam_now ? roam_now : 1;
 
-	roam_log(ROAM_L_INFO, "roamd: %s answered the move request on %s GHz: %s (%d)%s%s",
-		 sta->mac, roam_band_name(bss->band), btm_status_text(status), status,
+	roam_log(ROAM_L_INFO, "roamd: %s answered the move request on %s GHz at %d dBm: %s (%d)%s%s",
+		 sta->mac, roam_band_name(bss->band), sta->band[bss->band].signal,
+		 btm_status_text(status), status,
 		 target && target[0] ? ", to " : "", target ? target : "");
 
 	refusal_note(sta, status);
@@ -537,6 +628,74 @@ static void policy_beacon_poll(struct roam_bss *bss, unsigned int *budget)
 	}
 }
 
+#define ONCE_QUIET		600000
+#define ONCE_INTERVAL		900000
+
+/*
+ * A client in the middle range that has not scanned for a while gets one
+ * beacon request, so the controller learns how it hears the other devices.
+ */
+static void policy_beacon_once(struct roam_bss *bss, unsigned int *budget)
+{
+	struct mesh_nbr_info nbr[ROAMD_MAX_NEIGHBORS];
+	struct roam_sta *sta;
+	unsigned int n;
+
+	if (!config.beacon_once || !config.neighbor_reports)
+		return;
+
+	n = mesh_neighbors_remote(bss->ssid, nbr, ARRAY_SIZE(nbr));
+	if (!n)
+		return;
+
+	avl_for_each_element(&roam_sta_tree, sta, avl) {
+		const struct mesh_nbr_info *to;
+		uint32_t mode, duration;
+		uint64_t quiet_since;
+		int signal;
+		char bssid[18];
+
+		if (!*budget)
+			return;
+
+		if (sta->bss != bss || !sta->rrm || !beacon_req_mode(sta, &mode, &duration))
+			continue;
+
+		signal = sta->band[bss->band].signal;
+		if (signal == ROAMD_NO_SIGNAL || signal > config.steer_rssi_max ||
+		    signal < config.steer_rssi)
+			continue;
+
+		quiet_since = sta->last_probe > sta->connected_since ?
+			      sta->last_probe : sta->connected_since;
+		if (roam_now - quiet_since < ONCE_QUIET)
+			continue;
+
+		if (sta->last_once && roam_now - sta->last_once < ONCE_INTERVAL)
+			continue;
+
+		if (roam_now - sta->last_beacon_req < config.beacon_req_interval)
+			continue;
+
+		to = &nbr[sta->poll_next++ % n];
+		roam_mac_str(to->bssid, bssid, sizeof(bssid));
+
+		(*budget)--;
+		sta->last_once = roam_now;
+		sta->last_beacon_req = roam_now;
+
+		blob_buf_init(&b, 0);
+		blobmsg_add_string(&b, "addr", sta->mac);
+		blobmsg_add_string(&b, "ssid", bss->ssid);
+		blobmsg_add_string(&b, "bssid", bssid);
+		blobmsg_add_u32(&b, "mode", mode);
+		blobmsg_add_u32(&b, "duration", duration);
+		blobmsg_add_u32(&b, "channel", to->channel);
+		blobmsg_add_u32(&b, "op_class", to->op_class);
+		roam_bss_invoke(bss, "rrm_beacon_req", &b);
+	}
+}
+
 void roam_policy_run(struct roam_bss *bss)
 {
 	unsigned int beacon_budget = BEACON_REQ_PER_POLL;
@@ -559,6 +718,11 @@ void roam_policy_run(struct roam_bss *bss)
 	}
 
 	policy_beacon_poll(bss, &poll_budget);
+	policy_beacon_once(bss, &poll_budget);
+
+	/* In a mesh the controller decides where clients go, across devices and bands. */
+	if (mesh.enabled && (mesh.role == MESH_NODE || !list_empty(&mesh_members)))
+		return;
 
 	if (!config.bss_transition || !config.band_steering || config.prefer == PREFER_NONE)
 		return;

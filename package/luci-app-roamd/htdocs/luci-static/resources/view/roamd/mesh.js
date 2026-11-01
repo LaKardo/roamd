@@ -1668,7 +1668,9 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 			signalLine('5', c.signal_5, c.signal_5_age)
 		])));
 	if (c.rate)
-		info.push(infoRow(_('Rate'), '%d %s'.format(Math.round(c.rate / 1000), _('Mbit/s'))));
+		info.push(infoRow(_('Rate'), c.rx_rate
+			? _('%d Mbit/s to the client, %d Mbit/s from it').format(Math.round(c.rate / 1000), Math.round(c.rx_rate / 1000))
+			: '%d %s'.format(Math.round(c.rate / 1000), _('Mbit/s'))));
 	if (c.rx_bytes || c.tx_bytes) {
 		info.push(infoRow(_('Received by client'), humanBytes(c.rx_bytes)));
 		info.push(infoRow(_('Sent by client'), humanBytes(c.tx_bytes)));
@@ -1704,10 +1706,6 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		]),
 		c.wired ? '' : E('h4', {}, _('Wi-Fi bands allowed for this device')),
 		c.wired ? '' : E('div', { 'class': 'cbi-value' }, bands),
-		c.cardinal && !c.band_lock
-			? E('div', { 'class': 'alert-message notice' },
-				[ _('Cardinal holds this device on %s GHz while its signal there stays good. A manual band rule takes priority.').format(c.cardinal) ])
-			: '',
 		c.band_lock && !c.band_lock_active
 			? E('div', { 'class': 'alert-message warning' },
 				_('The rule is not in effect: the Wi-Fi system has no access points in this band.'))
@@ -1916,6 +1914,7 @@ function paramCell(c) {
 
 	return common.twoLine(E('div', {}, [
 		E('strong', {}, '%d %s'.format(Math.round(c.rate / 1000), _('Mbit/s'))),
+		c.rx_rate ? ' / %d'.format(Math.round(c.rx_rate / 1000)) : '',
 		c.encryption ? ' ' + c.encryption : ''
 	]), phy);
 }

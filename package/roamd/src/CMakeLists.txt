@@ -38,7 +38,6 @@ set(SOURCES
 	sha256.c
 	mesh_remote.c
 	mesh_http.c
-	cardinal.c
 )
 
 add_executable(roamd ${SOURCES})

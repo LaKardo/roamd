@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <netinet/ether.h>
 #include <libubox/blobmsg_json.h>
 
 #include "roamd.h"
@@ -829,30 +830,22 @@ static int roamd_mesh_neighbors(struct ubus_context *ctx, struct ubus_object *ob
 	return 0;
 }
 
-static int roamd_mesh_cardinal(struct ubus_context *ctx, struct ubus_object *obj,
-			struct ubus_request_data *req, const char *method,
-			struct blob_attr *msg)
+static int roamd_mesh_deny(struct ubus_context *ctx, struct ubus_object *obj,
+			   struct ubus_request_data *req, const char *method,
+			   struct blob_attr *msg)
 {
-	static const struct blobmsg_policy lp = { "locks", BLOBMSG_TYPE_ARRAY };
-	struct blob_attr *tb = NULL;
+	struct blob_attr *tb[__MESH_ARG_MAX];
+	struct ether_addr *ea;
 
-	if (!mesh.enabled || mesh.role != MESH_NODE)
+	if (!mesh.enabled)
 		return UBUS_STATUS_PERMISSION_DENIED;
 
-	blobmsg_parse(&lp, 1, &tb, blob_data(msg), blob_len(msg));
-	cardinal_set_remote(tb);
+	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
+	if (!tb[MESH_ARG_MAC] || !(ea = ether_aton(blobmsg_get_string(tb[MESH_ARG_MAC]))))
+		return UBUS_STATUS_INVALID_ARGUMENT;
 
-	return 0;
-}
-
-static int roamd_cardinal(struct ubus_context *ctx, struct ubus_object *obj,
-			struct ubus_request_data *req, const char *method,
-			struct blob_attr *msg)
-{
 	roam_time_update();
-	blob_buf_init(&b, 0);
-	cardinal_dump(&b);
-	ubus_send_reply(ctx, req, b.head);
+	roam_policy_deny(ea->ether_addr_octet, tb[MESH_ARG_NEIGHBORS]);
 
 	return 0;
 }
@@ -927,8 +920,7 @@ static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD("mesh_steer", roamd_mesh_steer, mesh_arg_policy),
 	UBUS_METHOD("mesh_drop", roamd_mesh_drop, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_neighbors", roamd_mesh_neighbors),
-	UBUS_METHOD_NOARG("mesh_cardinal", roamd_mesh_cardinal),
-	UBUS_METHOD_NOARG("cardinal", roamd_cardinal),
+	UBUS_METHOD("mesh_deny", roamd_mesh_deny, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_log", roamd_mesh_log),
 	UBUS_METHOD("mesh_log_ingest", roamd_mesh_log_ingest, ingest_policy),
 };
