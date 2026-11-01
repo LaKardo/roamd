@@ -177,6 +177,7 @@ bool mesh_txpower_apply(const int *want, const int *prev);
 #define MESH_TXPOWER_MAX	40
 bool mesh_country_valid(const char *c);
 bool mesh_country_apply(const char *want, const char *prev);
+const char *mesh_country_effective(void);
 bool mesh_channel_dfs(int channel);
 bool mesh_channel_apply(const int *channel, const int *width, const int *prev_channel,
 			uint8_t keep_channel_band);
@@ -327,6 +328,7 @@ bool mesh_ssh_pubkey(enum mesh_key key, char *out, size_t len);
 bool mesh_node_wait_at(const char *addr, const char *mac, int seconds);
 void mesh_member_register(const char *id, const char *mac, const char *addr,
 			  const char *hostname, const char *label);
+void mesh_member_hostname(const char *id, const char *hostname);
 int mesh_acquire_run(const char *addr, const char *task, bool reset);
 int mesh_release_run(const char *id, const char *task);
 int mesh_deps_ensure(bool need_only);

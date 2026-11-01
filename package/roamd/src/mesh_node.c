@@ -2242,6 +2242,16 @@ static void diag_cmd(struct blob_buf *b, const char *name, const char *cmd)
 static void node_identity_blob(struct blob_buf *b)
 {
 	char value[MESH_NAME_MAX];
+	FILE *f;
+
+	value[0] = 0;
+	f = fopen("/proc/sys/kernel/hostname", "r");
+	if (f) {
+		if (fgets(value, sizeof(value), f))
+			value[strcspn(value, "\r\n")] = 0;
+		fclose(f);
+	}
+	blobmsg_add_string(b, "hostname", value);
 
 	release_field("DISTRIB_RELEASE=", value, sizeof(value));
 	blobmsg_add_string(b, "os_version", value);

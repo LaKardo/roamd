@@ -56,39 +56,81 @@ known_arch() {
 	return 1
 }
 
+SDK_MIRRORS="${SDK_MIRRORS:-https://mirror-03.infra.openwrt.org https://downloads.openwrt.org https://archive.openwrt.org https://mirrors.tuna.tsinghua.edu.cn/openwrt}"
+SDK_CACHE="${SDK_CACHE:-$BUILD/sdk-dl}"
+
+# one mirror: give up when it stays below 1 MB/s for 30 s, the next one may be faster
+download() {
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL --retry 2 --connect-timeout 15 ${3:+--speed-limit 1048576 --speed-time 30} -C - -o "$2" "$1"
+	else
+		wget -c -q --tries=2 --timeout=30 -O "$2" "$1"
+	fi
+}
+
+fetch_text() {
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsSL --connect-timeout 15 --max-time 60 "$1"
+	else
+		wget -qO- --timeout=30 "$1"
+	fi
+}
+
 fetch_sdk() {
 	target=$1
 	subtarget=$2
 	dir=$3
-	base="https://downloads.openwrt.org/releases/$RELEASE/targets/$target/$subtarget"
+	path="releases/$RELEASE/targets/$target/$subtarget"
 
 	[ -d "$dir" ] && return 0
 
-	name=$(wget -qO- "$base/" | grep -oE 'openwrt-sdk[^"<]*\.tar\.(zst|xz)' | head -1)
-	if [ -z "$name" ]; then
+	sums=""
+	for m in $SDK_MIRRORS; do
+		sums=$(fetch_text "$m/$path/sha256sums" 2>/dev/null) && [ -n "$sums" ] && break
+	done
+	line=$(printf '%s\n' "$sums" | grep -E '\*?openwrt-sdk-[^ ]*\.tar\.(zst|xz)$' | head -1)
+	sha=${line%% *}
+	name=${line##*[ *]}
+	if [ -z "$line" ] || [ -z "$name" ]; then
 		echo "  SDK не найден: $target/$subtarget ($RELEASE)" >&2
 		return 1
 	fi
 
-	echo "  скачивание $name"
-	( cd "$BUILD" && wget -c -q --tries=0 --timeout=30 --waitretry=15 "$base/$name" ) || {
-		echo "  скачивание прервано, файл сохранён для докачки: $BUILD/$name" >&2
-		return 1
-	}
+	mkdir -p "$SDK_CACHE"
+	file="$SDK_CACHE/$name"
 
-	want=$(wget --spider -S "$base/$name" 2>&1 | sed -n 's/.*[Cc]ontent-[Ll]ength: *\([0-9]*\).*/\1/p' | tail -1)
-	have=$(wc -c < "$BUILD/$name" 2>/dev/null)
-	if [ -n "$want" ] && [ "$want" != "$have" ]; then
-		echo "  SDK скачан не полностью ($have из $want), повторите запуск" >&2
-		return 1
+	if [ -f "$file" ] && echo "$sha  $file" | sha256sum -c - >/dev/null 2>&1; then
+		echo "  SDK из кеша: $name"
+	else
+		ok=0
+		first=""
+		for m in $SDK_MIRRORS; do
+			first=${first:-$m}
+			echo "  скачивание $name ($m)"
+			if download "$m/$path/$name" "$file" fast; then
+				echo "$sha  $file" | sha256sum -c - >/dev/null 2>&1 && { ok=1; break; }
+				rm -f "$file"
+			fi
+			echo "  $m: не удалось или медленно, следующее зеркало" >&2
+		done
+		if [ "$ok" != 1 ]; then
+			echo "  все зеркала медленные, докачка с $first без ограничения скорости"
+			download "$first/$path/$name" "$file" &&
+				echo "$sha  $file" | sha256sum -c - >/dev/null 2>&1 && ok=1
+		fi
+		if [ "$ok" != 1 ]; then
+			rm -f "$file"
+			echo "  SDK не скачан или не совпала контрольная сумма" >&2
+			return 1
+		fi
+		find "$SDK_CACHE" -name 'openwrt-sdk-*' ! -name "$name" -delete 2>/dev/null
 	fi
 
 	mkdir -p "$dir"
 	case "$name" in
-	*.zst) tar --zstd -xf "$BUILD/$name" -C "$dir" --strip-components=1 ;;
-	*.xz)  tar -xJf "$BUILD/$name" -C "$dir" --strip-components=1 ;;
-	esac
-	rm -f "$BUILD/$name"
+	*.zst) tar --zstd -xf "$file" -C "$dir" --strip-components=1 ;;
+	*.xz)  tar -xJf "$file" -C "$dir" --strip-components=1 ;;
+	esac || { rm -rf "$dir"; return 1; }
 }
 
 prepare_feeds() {

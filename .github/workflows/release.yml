@@ -48,7 +48,7 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="1.3.2-r1"
+            version="1.3.3-r1"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -79,6 +79,12 @@ jobs:
         with:
           path: build/feeds-cache-${{ matrix.release }}
           key: feeds-${{ matrix.release }}
+
+      - name: Cache OpenWrt SDK
+        uses: actions/cache@v6
+        with:
+          path: build/sdk-dl
+          key: sdk-${{ matrix.release }}-${{ matrix.arch }}
 
       - name: Build packages
         env:

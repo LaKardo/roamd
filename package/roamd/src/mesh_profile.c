@@ -636,7 +636,7 @@ void mesh_profile_build(struct blob_buf *b)
 	}
 	blobmsg_close_table(b, t);
 
-	blobmsg_add_string(b, "country", mesh.country);
+	blobmsg_add_string(b, "country", mesh_country_effective());
 
 	devices_dump(b);
 }

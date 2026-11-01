@@ -910,6 +910,42 @@ bool mesh_country_valid(const char *c)
 }
 
 /*
+ * The region the nodes follow: the one chosen in roamd.mesh.country, or, when
+ * none is chosen, the one the controller radios are set to.
+ */
+const char *mesh_country_effective(void)
+{
+	static char out[sizeof(mesh.country)];
+	struct uci_session u;
+	struct uci_element *e;
+
+	if (mesh.country[0])
+		return mesh.country;
+
+	out[0] = 0;
+	if (!uci_session_open(&u, "wireless"))
+		return out;
+
+	uci_foreach_element(&u.pkg->sections, e) {
+		struct uci_section *s = uci_to_section(e);
+		const char *c;
+
+		if (strcmp(s->type, "wifi-device") || !mesh_radio_band(u.ctx, u.pkg, s->e.name))
+			continue;
+
+		c = uci_lookup_option_string(u.ctx, s, "country");
+		if (c && c[0] && mesh_country_valid(c)) {
+			snprintf(out, sizeof(out), "%s", c);
+			break;
+		}
+	}
+
+	uci_session_close(&u);
+
+	return out;
+}
+
+/*
  * Write the regulatory country into every wifi-device. Empty means "leave
  * the radios alone": the option is removed only if roamd set it before.
  */

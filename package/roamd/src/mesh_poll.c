@@ -249,7 +249,7 @@ static bool member_field_reserved(const char *name)
 {
 	static const char *const reserved[] = {
 		"online", "update_available", "consistency", "pkg_source", "issues",
-		"id", "managed", "bh_nodes", "bh_nodes_void"
+		"id", "managed", "bh_nodes", "bh_nodes_void", "hostname"
 	};
 	size_t i;
 
@@ -546,6 +546,7 @@ static void node_report(struct poll_node *n, struct blob_attr *result)
 
 	n->misses = 0;
 	n->online = true;
+	mesh_member_hostname(n->id, attr_str(result, "hostname"));
 	sta_collect(n, attr_field(result, "clients", BLOBMSG_TYPE_ARRAY), true);
 	sta_collect(n, attr_field(result, "heard", BLOBMSG_TYPE_ARRAY), false);
 	ap_collect(n, attr_field(result, "aps", BLOBMSG_TYPE_ARRAY));

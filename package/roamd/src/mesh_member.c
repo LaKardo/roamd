@@ -412,3 +412,49 @@ void mesh_member_register(const char *id, const char *mac, const char *addr,
 
 	uci_session_close(&u);
 }
+
+/*
+ * The node reports its hostname on every poll. Follow a rename: hostname
+ * always, the display name only while it is still the one made at capture
+ * (the old hostname or "<hostname> <id>"); a name set in LuCI stays.
+ */
+void mesh_member_hostname(const char *id, const char *hostname)
+{
+	char auto_name[MESH_NAME_MAX + MESH_ID_MAX + 2];
+	struct mesh_member *m = NULL, *cur;
+	struct uci_session u;
+	struct uci_section *s;
+	bool follow;
+
+	if (!hostname || !hostname[0] || strlen(hostname) >= MESH_NAME_MAX)
+		return;
+
+	list_for_each_entry(cur, &mesh_members, list)
+		if (!strcmp(cur->id, id))
+			m = cur;
+
+	if (!m || !strcmp(m->hostname, hostname))
+		return;
+
+	snprintf(auto_name, sizeof(auto_name), "%s %s", m->hostname, m->id);
+	follow = !m->name[0] || !strcmp(m->name, m->hostname) || !strcmp(m->name, auto_name);
+
+	if (!uci_session_open(&u, "roamd"))
+		return;
+
+	s = uci_session_find(&u, "member", "id", id);
+	if (s) {
+		uci_session_set(&u, s->e.name, "hostname", hostname);
+		if (follow)
+			uci_session_set(&u, s->e.name, "name", hostname);
+	}
+	uci_session_close(&u);
+
+	if (!s)
+		return;
+
+	roam_log(ROAM_L_INFO, "mesh: node %s renamed itself %s -> %s", id, m->hostname, hostname);
+	snprintf(m->hostname, sizeof(m->hostname), "%s", hostname);
+	if (follow)
+		snprintf(m->name, sizeof(m->name), "%s", hostname);
+}

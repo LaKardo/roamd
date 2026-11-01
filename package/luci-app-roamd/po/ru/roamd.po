@@ -1398,8 +1398,11 @@ msgstr "как задано на каждом устройстве"
 msgid "Regulatory region"
 msgstr "Регион"
 
-msgid "One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty leaves the region set on each device."
-msgstr "Один регион для контроллера и всех узлов. От него зависят доступные каналы и допустимая мощность. Сначала переключаются узлы, контроллер — последним. Пусто — регион, заданный на каждом устройстве, не меняется."
+msgid "One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty: the nodes take the region of the controller radios."
+msgstr "Один регион для контроллера и всех узлов. От него зависят доступные каналы и допустимая мощность. Сначала переключаются узлы, контроллер — последним. Пусто — узлы берут регион радио контроллера."
+
+msgid "as on the controller (%s)"
+msgstr "как на контроллере (%s)"
 
 msgid "as configured"
 msgstr "как настроено"

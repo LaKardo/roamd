@@ -2291,11 +2291,14 @@ function renderSettings(state) {
 		lastRow.style.display = display;
 	}
 
+	var ctrlCountry = ((state.self || {}).radios || []).map(function(r) { return r.country; }).filter(function(c) { return c; })[0];
 	var countryConfirmed = false;
 	var countrySelect = E('select', {
 		'class': 'cbi-input-select', 'disabled': readOnly || null,
 		'change': function(ev) { form.country = ev.target.value; }
-	}, [ E('option', { 'value': '' }, _('leave as set on each device')) ].concat(
+	}, [ E('option', { 'value': '' }, ctrlCountry
+		? _('as on the controller (%s)').format(ctrlCountry)
+		: _('leave as set on each device')) ].concat(
 		(state.countries || []).filter(function(c) {
 			return /^([A-Z]{2}|00)$/.test(c.code);
 		}).map(function(c) {
@@ -2313,7 +2316,7 @@ function renderSettings(state) {
 		E('div', { 'class': 'cbi-value-field' }, [
 			countrySelect,
 			E('div', { 'class': 'cbi-value-description' },
-				_('One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty leaves the region set on each device.'))
+				_('One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty: the nodes take the region of the controller radios.'))
 		])
 	]);
 
@@ -2423,6 +2426,9 @@ function renderSettings(state) {
 	return E('div', {}, [
 		netsField,
 
+		E('h3', {}, _('Radio')),
+		countryRow,
+
 		E('h3', {}, _('Wireless backhaul')),
 		E('p', { 'class': 'cbi-value-description' }, _('A hidden Wi-Fi network the nodes use to talk to each other. Leave the name and key empty to generate them automatically.')),
 		toggle('backhaul_enabled', _('Wireless backhaul')),
@@ -2436,9 +2442,6 @@ function renderSettings(state) {
 			_('dBm. Below this level 5 GHz is not chosen.'), -95, -40),
 		text('backhaul_ssid', _('Backhaul network name')),
 		text('backhaul_key', _('Backhaul key'), null, true),
-
-		E('h3', {}, _('Radio')),
-		countryRow,
 
 		E('h3', {}, _('Node behaviour')),
 		nodeUiRow,
