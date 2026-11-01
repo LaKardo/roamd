@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -21,6 +22,13 @@
 #define POLL_MISS_LIMIT	2
 #define KH_BSSID_NONE		"00:00:00:00:00:00|"
 
+#define POLL_MEAS_MAX	8
+
+struct poll_meas {
+	char bssid[MESH_MAC_MAX];
+	int signal;
+};
+
 struct poll_sta {
 	uint8_t addr[6];
 	char mac[MESH_MAC_MAX];
@@ -29,6 +37,12 @@ struct poll_sta {
 	uint32_t connected;
 	uint8_t band;
 	bool client;
+	bool has_btm;
+	bool btm_paused;
+	int btm_status;
+	uint32_t btm_age;
+	struct poll_meas meas[POLL_MEAS_MAX];
+	unsigned int n_meas;
 };
 
 struct poll_ap {
@@ -174,6 +188,34 @@ static uint32_t attr_u32(struct blob_attr *table, const char *name)
 	return cur ? blobmsg_get_u32(cur) : 0;
 }
 
+static void meas_collect(struct poll_sta *s, struct blob_attr *list)
+{
+	struct blob_attr *cur;
+	int rem;
+
+	if (!list)
+		return;
+
+	blobmsg_for_each_attr(cur, list, rem) {
+		struct poll_meas *m;
+		const char *bssid;
+
+		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE || s->n_meas >= POLL_MEAS_MAX)
+			continue;
+
+		bssid = attr_str(cur, "bssid");
+		if (!bssid || !mesh_valid_mac(bssid) || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
+			continue;
+
+		if ((uint64_t)attr_u32(cur, "age") * 1000 > roam_meas_fresh())
+			continue;
+
+		m = &s->meas[s->n_meas++];
+		snprintf(m->bssid, sizeof(m->bssid), "%s", bssid);
+		m->signal = (int)attr_u32(cur, "signal");
+	}
+}
+
 static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client)
 {
 	struct blob_attr *cur;
@@ -209,6 +251,15 @@ static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client
 		s->connected = client ? attr_u32(cur, "connected") : 0;
 		s->band = mesh_band_bit(attr_str(cur, "band"));
 		s->client = client;
+
+		if (client && attr_field(cur, "btm_status", BLOBMSG_TYPE_INT32)) {
+			s->has_btm = true;
+			s->btm_status = (int)attr_u32(cur, "btm_status");
+			s->btm_age = attr_u32(cur, "btm_age");
+		}
+		s->btm_paused = client && attr_field(cur, "btm_paused", BLOBMSG_TYPE_BOOL);
+		if (client)
+			meas_collect(s, attr_field(cur, "reports", BLOBMSG_TYPE_ARRAY));
 	}
 }
 
@@ -1047,6 +1098,22 @@ static void steer_memo_result(struct steer_memo *m, bool sent, const char *reaso
 		 m->home, mac, m->target, reason ? reason : "no answer");
 }
 
+/* The node reports how the client answered the last move request. */
+static void steer_memo_answer(const struct poll_sta *c, const char *home)
+{
+	struct steer_memo *m = steer_memo_find(c->addr);
+	char reason[48];
+
+	if (!m || m->refused || !c->has_btm || !c->btm_status || strcmp(m->home, home))
+		return;
+
+	if ((uint64_t)c->btm_age * 1000 > roam_now - m->at)
+		return;
+
+	snprintf(reason, sizeof(reason), "client refused, status %d", c->btm_status);
+	steer_memo_result(m, false, reason);
+}
+
 static void steer_call_cb(void *priv, struct blob_attr *result, bool ok)
 {
 	static const struct blobmsg_policy rp[2] = {
@@ -1073,12 +1140,95 @@ static void steer_call_cb(void *priv, struct blob_attr *result, bool ok)
 	free(sc);
 }
 
+static const struct poll_ap *ap_find(const struct poll_node *n, const char *ssid, uint8_t band)
+{
+	unsigned int i;
+
+	for (i = 0; i < n->n_ap; i++)
+		if (!strcmp(n->ap[i].ssid, ssid) && mesh_band_bit(n->ap[i].band) == band)
+			return &n->ap[i];
+
+	return NULL;
+}
+
+static const struct poll_meas *meas_find(const struct poll_sta *c, const char *bssid)
+{
+	unsigned int i;
+
+	for (i = 0; i < c->n_meas; i++)
+		if (!strcasecmp(c->meas[i].bssid, bssid))
+			return &c->meas[i];
+
+	return NULL;
+}
+
+/* 2.4 GHz has to be better by rssi_diff to win against 5 GHz. */
+static int meas_score(int signal, uint8_t band)
+{
+	return mesh_band_from_bit(band) == BAND_LOW ? signal - config.rssi_diff : signal;
+}
+
+/*
+ * Pick the target among the access points of other devices the client itself
+ * measured, on any band. Returns false when the client measured none of them.
+ */
+static bool meas_pick(const struct poll_sta *c, unsigned int home, const struct poll_node **best,
+		      uint8_t *best_band, int *best_signal, int *home_signal)
+{
+	const struct poll_ap *own = ap_find(&nodes[home], c->ssid, c->band);
+	const struct poll_meas *m;
+	int best_score = 0;
+	bool measured = false;
+	unsigned int i, j;
+
+	*best = NULL;
+	*home_signal = c->signal;
+	if (own && (m = meas_find(c, own->bssid)))
+		*home_signal = m->signal;
+
+	for (i = 0; i < n_nodes; i++) {
+		const struct poll_node *n = &nodes[i];
+
+		if (i == home || !n->online)
+			continue;
+
+		for (j = 0; j < n->n_ap; j++) {
+			const struct poll_ap *a = &n->ap[j];
+			uint8_t bit = mesh_band_bit(a->band);
+			int score;
+
+			if (strcmp(a->ssid, c->ssid) || !(m = meas_find(c, a->bssid)))
+				continue;
+
+			measured = true;
+
+			if (m->signal < config.rssi_low ||
+			    roam_admit(c->addr, n->id, mesh_band_from_bit(bit)) != ADMIT_OK)
+				continue;
+
+			score = meas_score(m->signal, bit);
+			if (!*best || score > best_score) {
+				*best = n;
+				*best_band = bit;
+				*best_signal = m->signal;
+				best_score = score;
+			}
+		}
+	}
+
+	if (*best && roam_admit(c->addr, nodes[home].id, mesh_band_from_bit(c->band)) == ADMIT_OK &&
+	    best_score - meas_score(*home_signal, c->band) < config.node_rssi_diff)
+		*best = NULL;
+
+	return measured;
+}
+
 static void steer_client(unsigned int from, unsigned int to, unsigned int client)
 {
 	const struct poll_sta *c = ref_sta(&refs[client]);
 	const char *mac = c->mac, *ssid = c->ssid;
 	unsigned int home = refs[client].node, k;
-	uint8_t band = c->band;
+	uint8_t band = c->band, to_band = c->band;
 	enum roam_band rb = mesh_band_from_bit(band);
 	const struct poll_node *best = NULL;
 	int best_signal = 0, home_signal = 0;
@@ -1087,6 +1237,17 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 
 	if (!net_roaming(ssid))
 		return;
+
+	steer_memo_answer(c, nodes[home].id);
+
+	if (c->btm_paused)
+		return;
+
+	if (meas_pick(c, home, &best, &to_band, &best_signal, &home_signal)) {
+		if (!best)
+			return;
+		goto steer;
+	}
 
 	for (k = from; k < to; k++) {
 		const struct poll_sta *s = ref_sta(&refs[k]);
@@ -1112,11 +1273,12 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 	    best_signal - home_signal < config.node_rssi_diff)
 		return;
 
+steer:
 	if (steer_memo_holds(c, nodes[home].id, best->id))
 		return;
 
 	list[0] = 0;
-	if (!neighbor_list(best, c->addr, ssid, band, list, sizeof(list)))
+	if (!neighbor_list(best, c->addr, ssid, to_band, list, sizeof(list)))
 		neighbor_list(best, c->addr, ssid, 0, list, sizeof(list));
 
 	if (list[0])
@@ -1126,9 +1288,9 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 		snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"id\":\"%s\"}", mac, best->id);
 
 	roam_log(ROAM_L_INFO,
-		 "mesh: %s is heard better on %s (%s GHz, %d dBm) than on %s (%d dBm), moving",
-		 mac, best->id, roam_band_name(rb), best_signal,
-		 nodes[home].id, home_signal);
+		 "mesh: %s is heard better on %s (%s GHz, %d dBm) than on %s (%s GHz, %d dBm), moving",
+		 mac, best->id, roam_band_name(mesh_band_from_bit(to_band)), best_signal,
+		 nodes[home].id, roam_band_name(rb), home_signal);
 
 	memo = steer_memo_put(c, nodes[home].id, best->id);
 

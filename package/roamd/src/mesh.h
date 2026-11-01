@@ -449,6 +449,14 @@ bool mesh_client_set(const char *mac, const char *band, const char *alias, const
 
 #define MESH_NBR_MAX	64
 
+struct mesh_nbr_info {
+	uint8_t bssid[6];
+	int op_class;
+	int channel;
+};
+
+unsigned int mesh_neighbors_remote(const char *ssid, struct mesh_nbr_info *out, unsigned int max);
+
 void mesh_neighbors_set(struct blob_attr *arr);
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max);
 void mesh_peer_clients_set(struct blob_attr *arr);

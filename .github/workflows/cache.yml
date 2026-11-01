@@ -1,0 +1,72 @@
+name: Warm SDK cache
+
+# Caches are scoped to the ref that saved them; a tag build only sees its own
+# and the default branch caches. Keep the SDK and feeds cached on main.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'targets/**'
+      - 'build.sh'
+      - '.github/workflows/cache.yml'
+  schedule:
+    - cron: '17 3 */5 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: Build matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      jobs: ${{ steps.build.outputs.jobs }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - id: build
+        run: |
+          {
+            printf 'jobs='
+            {
+              while read -r branch release _; do
+                [ -n "$branch" ] || continue
+                awk -v b="$branch" -v r="$release" '{ printf "{\"branch\":\"%s\",\"release\":\"%s\",\"arch\":\"%s\"}\n", b, r, $1 }' "targets/$branch.txt"
+              done < targets/branches.txt
+            } | paste -sd, - | sed 's/^/[/; s/$/]/'
+          } >> "$GITHUB_OUTPUT"
+
+  warm:
+    name: ${{ matrix.branch }} ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    needs: matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.jobs) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Cache OpenWrt feeds
+        uses: actions/cache@v6
+        with:
+          path: build/feeds-cache-${{ matrix.release }}
+          key: feeds-${{ matrix.release }}
+
+      - name: Cache OpenWrt SDK
+        uses: actions/cache@v6
+        with:
+          path: build/sdk-dl
+          key: sdk-${{ matrix.release }}-${{ matrix.arch }}
+
+      - name: Fetch SDK and feeds
+        timeout-minutes: 40
+        env:
+          RELEASE: ${{ matrix.release }}
+          ARCH: ${{ matrix.arch }}
+        run: ./build.sh --prepare "$ARCH"

@@ -37,6 +37,7 @@ const char *const mesh_policy_opts[] = {
 	"rssi_good", "rssi_low", "rssi_diff", "node_rssi_diff", "kick_rssi",
 	"hold_time", "age_time", "check_time_low", "check_time_high", "poll_interval",
 	"deny_time", "deny_probe", "allow_kick", "steer_retries", "beacon_req_interval",
+	"beacon_poll_interval",
 	"log_level", "cardinal", "cardinal_window", "cardinal_error_max", "cardinal_delta", NULL
 };
 
@@ -636,7 +637,13 @@ void mesh_profile_build(struct blob_buf *b)
 	}
 	blobmsg_close_table(b, t);
 
-	blobmsg_add_string(b, "country", mesh_country_effective());
+	{
+		const char *country = mesh_country_effective();
+
+		/* Without a region anywhere the nodes keep their own. */
+		if (country[0])
+			blobmsg_add_string(b, "country", country);
+	}
 
 	devices_dump(b);
 }

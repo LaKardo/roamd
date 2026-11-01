@@ -62,6 +62,13 @@ static void status_add_clients(struct roam_bss *bss)
 			blobmsg_add_string(&b, "rrm_modes", modes);
 		}
 		blobmsg_add_u32(&b, "steer_count", sta->steer_count);
+		if (sta->btm_status_at) {
+			blobmsg_add_u32(&b, "btm_status", (uint32_t)sta->btm_status);
+			blobmsg_add_u32(&b, "btm_age", (roam_now - sta->btm_status_at) / 1000);
+		}
+		blobmsg_add_u32(&b, "btm_rejects", roam_policy_btm_rejects(sta->addr));
+		if (roam_policy_btm_paused(sta->addr))
+			blobmsg_add_u8(&b, "btm_paused", 1);
 		blobmsg_add_string(&b, "band_lock", lock_name(roam_device_lock(sta->addr)));
 
 		bands = blobmsg_open_table(&b, "bands");

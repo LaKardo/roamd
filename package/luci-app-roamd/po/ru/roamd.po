@@ -205,6 +205,24 @@ msgstr "Интервал запроса маяков"
 msgid "Milliseconds between 802.11k measurements of the other band."
 msgstr "Миллисекунды между измерениями другого диапазона по 802.11k."
 
+msgid "Measurement poll interval"
+msgstr "Интервал опроса клиентов"
+
+msgid "Milliseconds between requests asking an 802.11k client how it hears the access points of the other devices, one access point per request. The controller then moves the client to the best one, also to another band. 0 turns it off."
+msgstr "Миллисекунды между запросами к клиенту с 802.11k о том, как он слышит точки других устройств (одна точка за запрос). По этим данным контроллер переводит клиента на лучшую точку, в том числе в другой диапазон. 0 — выключено."
+
+msgid "last answer: accepted"
+msgstr "последний ответ: согласен"
+
+msgid "last answer: refused (%d)"
+msgstr "последний ответ: отказ (%d)"
+
+msgid "client keeps refusing, paused for 30 min"
+msgstr "клиент отказывается, пауза 30 мин"
+
+msgid "refusals: %d"
+msgstr "отказов: %d"
+
 msgid "Log level"
 msgstr "Уровень журнала"
 
@@ -1400,6 +1418,9 @@ msgstr "Регион"
 
 msgid "One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty: the nodes take the region of the controller radios."
 msgstr "Один регион для контроллера и всех узлов. От него зависят доступные каналы и допустимая мощность. Сначала переключаются узлы, контроллер — последним. Пусто — узлы берут регион радио контроллера."
+
+msgid "No region is set on the controller radios: after a reboot the radios fall back to world limits and some channels may stop working. Choose the region explicitly."
+msgstr "На радио контроллера регион не задан: после перезагрузки действуют общемировые ограничения, и часть каналов может перестать работать. Выберите регион явно."
 
 msgid "as on the controller (%s)"
 msgstr "как на контроллере (%s)"

@@ -117,6 +117,21 @@ function renderInterfaces() {
 	return table;
 }
 
+function btmCell(client) {
+	var out = [ String(client.steer_count || 0) ];
+
+	if (client.btm_status != null)
+		out.push(client.btm_status == 0
+			? _('last answer: accepted')
+			: _('last answer: refused (%d)').format(client.btm_status));
+	if (client.btm_paused)
+		out.push(_('client keeps refusing, paused for 30 min'));
+	else if (client.btm_rejects)
+		out.push(_('refusals: %d').format(client.btm_rejects));
+
+	return out.join(', ');
+}
+
 function renderClients() {
 	var rows = [];
 
@@ -137,7 +152,7 @@ function renderClients() {
 			perBand.length ? perBand.join(', ') : E('em', {}, _('unknown')),
 			client.btm ? _('yes') : _('no'),
 			client.rrm ? _('yes') : _('no'),
-			String(client.steer_count || 0)
+			btmCell(client)
 		]);
 	});
 
@@ -660,6 +675,11 @@ return view.extend({
 			_('Milliseconds between 802.11k measurements of the other band.'));
 		o.datatype = 'uinteger';
 		o.default = '20000';
+
+		o = sub.option(form.Value, 'beacon_poll_interval', _('Measurement poll interval'),
+			_('Milliseconds between requests asking an 802.11k client how it hears the access points of the other devices, one access point per request. The controller then moves the client to the best one, also to another band. 0 turns it off.'));
+		o.datatype = 'uinteger';
+		o.default = '60000';
 
 		o = sub.option(form.Flag, 'cardinal', _('Cardinal'),
 			_('Automatically hold a client on the preferred band once its signal there has been good for the whole observation window, and release it as soon as the signal drops. A manual band rule of the device always takes priority.'));

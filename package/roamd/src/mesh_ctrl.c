@@ -668,7 +668,8 @@ void mesh_ctrl_radio_apply(bool nodes_done)
 	if (!nodes_done && !list_empty(&mesh_members))
 		return;
 
-	changed = mesh_country_apply(mesh.country, known ? applied : mesh.country);
+	/* No region chosen means the nodes follow these radios: keep what they have. */
+	changed = mesh_country_apply(mesh.country, NULL);
 	changed = mesh_channel_apply(mesh.channel, mesh.width, known ? ch_applied : mesh.channel, 0) ||
 		  changed;
 	if (changed)

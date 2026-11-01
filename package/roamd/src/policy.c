@@ -11,8 +11,14 @@
 #define KICK_REASON		5
 #define STEER_RETRY_INTERVAL	5000
 #define BEACON_REQ_PER_POLL	4
+#define BEACON_POLL_PER_POLL	2
 #define INSIST_LOG_INTERVAL	1800000
 #define INSIST_LOG_SLOTS	32
+#define BTM_REFUSE_SLOTS	64
+#define BTM_REFUSE_LIMIT	3
+#define BTM_REFUSE_HOLD		1800000
+#define BTM_REJECT_CANDIDATES	6
+#define BTM_REJECT_NO_CANDIDATE	7
 
 static struct blob_buf b;
 
@@ -208,7 +214,7 @@ static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_
 
 	blob_buf_init(&b, 0);
 	blobmsg_add_string(&b, "addr", sta->mac);
-	blobmsg_add_u32(&b, "dialog_token", ++sta->dialog_token);
+	blobmsg_add_u32(&b, "dialog_token", roam_policy_btm_token(sta));
 	blobmsg_add_u8(&b, "disassociation_imminent", 0);
 	blobmsg_add_u32(&b, "disassociation_timer", 0);
 	blobmsg_add_u32(&b, "reassoc_delay", 0);
@@ -280,7 +286,144 @@ bool roam_policy_can_steer(const struct roam_sta *sta)
 	if (sta->steer_count >= config.steer_retries)
 		return false;
 
+	if (roam_policy_btm_paused(sta->addr))
+		return false;
+
 	return !sta->last_steer || roam_now - sta->last_steer >= STEER_RETRY_INTERVAL;
+}
+
+/*
+ * Clients that keep refusing to move, kept by address because the station
+ * entry is reset on every reconnect. After BTM_REFUSE_LIMIT refusals in
+ * BTM_REFUSE_HOLD the client is left alone for BTM_REFUSE_HOLD.
+ */
+static struct {
+	uint8_t addr[6];
+	uint32_t count;
+	uint64_t last;
+	uint64_t paused_until;
+} refusals[BTM_REFUSE_SLOTS];
+
+static int refusal_find(const uint8_t *addr, bool create)
+{
+	unsigned int i, oldest = 0;
+
+	for (i = 0; i < BTM_REFUSE_SLOTS; i++) {
+		if (refusals[i].last && !memcmp(refusals[i].addr, addr, 6))
+			return i;
+
+		if (refusals[i].last < refusals[oldest].last)
+			oldest = i;
+	}
+
+	if (!create)
+		return -1;
+
+	memset(&refusals[oldest], 0, sizeof(refusals[oldest]));
+	memcpy(refusals[oldest].addr, addr, 6);
+
+	return oldest;
+}
+
+bool roam_policy_btm_paused(const uint8_t *addr)
+{
+	int i = refusal_find(addr, false);
+
+	return i >= 0 && refusals[i].paused_until && roam_now < refusals[i].paused_until;
+}
+
+uint32_t roam_policy_btm_rejects(const uint8_t *addr)
+{
+	int i = refusal_find(addr, false);
+
+	if (i < 0 || roam_now - refusals[i].last >= BTM_REFUSE_HOLD)
+		return 0;
+
+	return refusals[i].count;
+}
+
+static void refusal_note(struct roam_sta *sta, int status)
+{
+	int i;
+
+	if (!status) {
+		i = refusal_find(sta->addr, false);
+		if (i >= 0)
+			memset(&refusals[i], 0, sizeof(refusals[i]));
+		return;
+	}
+
+	if (status != BTM_REJECT_CANDIDATES && status != BTM_REJECT_NO_CANDIDATE)
+		return;
+
+	i = refusal_find(sta->addr, true);
+	if (roam_now - refusals[i].last >= BTM_REFUSE_HOLD)
+		refusals[i].count = 0;
+
+	refusals[i].last = roam_now ? roam_now : 1;
+	if (++refusals[i].count < BTM_REFUSE_LIMIT)
+		return;
+
+	refusals[i].count = 0;
+	refusals[i].paused_until = roam_now + BTM_REFUSE_HOLD;
+
+	roam_log(ROAM_L_INFO, "roamd: %s refused to move %u times, leaving it alone for %u min",
+		 sta->mac, BTM_REFUSE_LIMIT, BTM_REFUSE_HOLD / 60000);
+}
+
+/* The token a BSS Transition Management request carries, so that the answer can be matched. */
+uint8_t roam_policy_btm_token(struct roam_sta *sta)
+{
+	if (!++sta->dialog_token)
+		sta->dialog_token = 1;
+
+	sta->btm_token = sta->dialog_token;
+	sta->btm_sent_at = roam_now ? roam_now : 1;
+
+	return sta->btm_token;
+}
+
+static const char *btm_status_text(int status)
+{
+	switch (status) {
+	case 0:
+		return "accepted";
+	case 1:
+		return "rejected, no reason given";
+	case 2:
+		return "rejected, not enough beacons";
+	case 3:
+		return "rejected, not enough capacity";
+	case 4:
+		return "rejected, termination undesired";
+	case 5:
+		return "rejected, termination delay";
+	case 6:
+		return "rejected, candidate list provided";
+	case 7:
+		return "rejected, no suitable candidate";
+	case 8:
+		return "rejected, leaving the network";
+	default:
+		return "rejected";
+	}
+}
+
+void roam_policy_btm_response(struct roam_sta *sta, struct roam_bss *bss, int token, int status,
+			      const char *target)
+{
+	if (!sta->btm_sent_at || (token >= 0 && token != sta->btm_token))
+		return;
+
+	sta->btm_sent_at = 0;
+	sta->btm_status = status;
+	sta->btm_status_at = roam_now ? roam_now : 1;
+
+	roam_log(ROAM_L_INFO, "roamd: %s answered the move request on %s GHz: %s (%d)%s%s",
+		 sta->mac, roam_band_name(bss->band), btm_status_text(status), status,
+		 target && target[0] ? ", to " : "", target ? target : "");
+
+	refusal_note(sta, status);
 }
 
 static bool sta_should_leave(struct roam_sta *sta, struct roam_bss *bss,
@@ -317,9 +460,87 @@ static bool sta_should_leave(struct roam_sta *sta, struct roam_bss *bss,
 	return here == ROAMD_NO_SIGNAL || here - there < config.rssi_diff;
 }
 
+/* Remote APs are measured in turn, so a measurement lives a few poll rounds. */
+uint64_t roam_meas_fresh(void)
+{
+	uint64_t t = (uint64_t)config.beacon_poll_interval * 4;
+
+	return t > config.age_time ? t : config.age_time;
+}
+
+/*
+ * Ask each 802.11k client in turn how it hears the access points of the
+ * other devices, one remote AP per request, so the controller can compare
+ * places the client is not heard from.
+ */
+static void policy_beacon_poll(struct roam_bss *bss, unsigned int *budget)
+{
+	struct mesh_nbr_info nbr[ROAMD_MAX_NEIGHBORS];
+	struct roam_sta *sta;
+	unsigned int n;
+
+	if (!config.beacon_poll_interval || !config.neighbor_reports)
+		return;
+
+	n = mesh_neighbors_remote(bss->ssid, nbr, ARRAY_SIZE(nbr) - 1);
+	if (!n)
+		return;
+
+	/* The own access point too, so that both sides of the comparison come from the client. */
+	if (bss->op_class && bss->channel) {
+		memcpy(nbr[n].bssid, bss->bssid, 6);
+		nbr[n].op_class = bss->op_class;
+		nbr[n].channel = bss->channel;
+		n++;
+	}
+
+	avl_for_each_element(&roam_sta_tree, sta, avl) {
+		const struct mesh_nbr_info *to;
+		uint32_t mode, duration;
+		char bssid[18];
+
+		if (!*budget)
+			return;
+
+		if (sta->bss != bss || !sta->rrm || !beacon_req_mode(sta, &mode, &duration))
+			continue;
+
+		if (roam_now - sta->connected_since < config.hold_time)
+			continue;
+
+		if (sta->beacon_req_silent >= config.steer_retries)
+			continue;
+
+		if (sta->last_poll_req && roam_now - sta->last_poll_req < config.beacon_poll_interval)
+			continue;
+
+		if (roam_now - sta->last_beacon_req < config.beacon_req_interval)
+			continue;
+
+		to = &nbr[sta->poll_next++ % n];
+		roam_mac_str(to->bssid, bssid, sizeof(bssid));
+
+		(*budget)--;
+		sta->last_poll_req = roam_now;
+		sta->last_beacon_req = roam_now;
+		sta->beacon_req_silent++;
+
+		blob_buf_init(&b, 0);
+		blobmsg_add_string(&b, "addr", sta->mac);
+		blobmsg_add_string(&b, "ssid", bss->ssid);
+		blobmsg_add_string(&b, "bssid", bssid);
+		blobmsg_add_u32(&b, "mode", mode);
+		blobmsg_add_u32(&b, "duration", duration);
+		blobmsg_add_u32(&b, "channel", to->channel);
+		blobmsg_add_u32(&b, "op_class", to->op_class);
+		roam_bss_invoke(bss, "rrm_beacon_req", &b);
+	}
+}
+
 void roam_policy_run(struct roam_bss *bss)
 {
 	unsigned int beacon_budget = BEACON_REQ_PER_POLL;
+	unsigned int poll_budget = BEACON_POLL_PER_POLL;
 	struct roam_bss *target;
 	struct roam_sta *sta;
 
@@ -336,6 +557,8 @@ void roam_policy_run(struct roam_bss *bss)
 		if (verdict != ADMIT_OK)
 			policy_evict(sta, bss, verdict);
 	}
+
+	policy_beacon_poll(bss, &poll_budget);
 
 	if (!config.bss_transition || !config.band_steering || config.prefer == PREFER_NONE)
 		return;

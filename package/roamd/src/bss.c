@@ -481,6 +481,31 @@ static int handle_sta_event(struct roam_bss *bss, const char *method, struct blo
 	return 17;
 }
 
+/* What the client measured towards an access point of another device. */
+static void sta_meas_store(struct roam_sta *sta, const uint8_t *bssid, int signal)
+{
+	struct roam_sta_meas *m = NULL;
+	unsigned int i;
+
+	for (i = 0; i < ROAMD_MEAS_MAX; i++) {
+		if (!memcmp(sta->meas[i].bssid, bssid, 6)) {
+			m = &sta->meas[i];
+			break;
+		}
+
+		if (!m || sta->meas[i].seen < m->seen)
+			m = &sta->meas[i];
+	}
+
+	memcpy(m->bssid, bssid, 6);
+	m->signal = signal;
+	m->seen = roam_now ? roam_now : 1;
+	sta->beacon_req_silent = 0;
+
+	roam_log(ROAM_L_DEBUG, "roamd: beacon report %s for %02x:%02x:%02x:%02x:%02x:%02x signal %d",
+		 sta->mac, bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], signal);
+}
+
 static int handle_beacon_report(struct blob_attr *msg)
 {
 	enum {
@@ -517,11 +542,14 @@ static int handle_beacon_report(struct blob_attr *msg)
 	if (!bssid)
 		return 0;
 
-	target = roam_bss_by_bssid((uint8_t *)bssid->ether_addr_octet);
-	if (!target)
-		return 0;
-
 	rcpi = (uint8_t)blobmsg_get_u16(tb[BR_RCPI]);
+	target = roam_bss_by_bssid((uint8_t *)bssid->ether_addr_octet);
+	if (!target) {
+		if (rcpi < ROAMD_RCPI_IMPLAUSIBLE && sta->bss)
+			sta_meas_store(sta, bssid->ether_addr_octet, ((int)rcpi / 2) - 110);
+		return 0;
+	}
+
 	if (rcpi >= ROAMD_RCPI_IMPLAUSIBLE) {
 		roam_log(ROAM_L_DEBUG, "roamd: beacon report %s on %s GHz dropped, rcpi %u",
 			 sta->mac, roam_band_name(target->band), rcpi);
@@ -534,6 +562,8 @@ static int handle_beacon_report(struct blob_attr *msg)
 	sta->band[target->band].signal = signal;
 	sta->band[target->band].seen = roam_now;
 	sta->band[target->band].present = true;
+	if (sta->bss)
+		sta_meas_store(sta, bssid->ether_addr_octet, signal);
 
 	roam_log(ROAM_L_DEBUG, "roamd: beacon report %s on %s GHz signal %d (rcpi %u)",
 		 sta->mac, roam_band_name(target->band), signal, rcpi);
@@ -563,6 +593,63 @@ static int handle_disassoc(struct blob_attr *msg)
 	return 0;
 }
 
+static int blob_int(struct blob_attr *a)
+{
+	switch (blobmsg_type(a)) {
+	case BLOBMSG_TYPE_INT8:
+		return blobmsg_get_u8(a);
+	case BLOBMSG_TYPE_INT16:
+		return blobmsg_get_u16(a);
+	case BLOBMSG_TYPE_INT32:
+		return (int)blobmsg_get_u32(a);
+	default:
+		return -1;
+	}
+}
+
+static int handle_btm_response(struct roam_bss *bss, struct blob_attr *msg)
+{
+	enum {
+		BT_ADDR,
+		BT_TOKEN,
+		BT_STATUS,
+		BT_TARGET,
+		__BT_MAX
+	};
+	static const struct blobmsg_policy policy[__BT_MAX] = {
+		[BT_ADDR] = { "address", BLOBMSG_TYPE_STRING },
+		[BT_TOKEN] = { "dialog-token", BLOBMSG_TYPE_UNSPEC },
+		[BT_STATUS] = { "status-code", BLOBMSG_TYPE_UNSPEC },
+		[BT_TARGET] = { "target-bssid", BLOBMSG_TYPE_STRING },
+	};
+	struct blob_attr *tb[__BT_MAX];
+	struct ether_addr *ea;
+	struct roam_sta *sta;
+	int status;
+
+	blobmsg_parse(policy, __BT_MAX, tb, blob_data(msg), blob_len(msg));
+	if (!tb[BT_ADDR] || !tb[BT_STATUS])
+		return 0;
+
+	status = blob_int(tb[BT_STATUS]);
+	if (status < 0)
+		return 0;
+
+	ea = ether_aton(blobmsg_get_string(tb[BT_ADDR]));
+	if (!ea)
+		return 0;
+
+	sta = roam_sta_get((uint8_t *)ea->ether_addr_octet, false);
+	if (!sta)
+		return 0;
+
+	roam_time_update();
+	roam_policy_btm_response(sta, bss, tb[BT_TOKEN] ? blob_int(tb[BT_TOKEN]) : -1, status,
+				 tb[BT_TARGET] ? blobmsg_get_string(tb[BT_TARGET]) : NULL);
+
+	return 0;
+}
+
 static int bss_notify_cb(struct ubus_context *ctx, struct ubus_object *obj,
 			 struct ubus_request_data *req, const char *method,
 			 struct blob_attr *msg)
@@ -574,6 +661,9 @@ static int bss_notify_cb(struct ubus_context *ctx, struct ubus_object *obj,
 
 	if (!strcmp(method, "beacon-report"))
 		return handle_beacon_report(msg);
+
+	if (!strcmp(method, "bss-transition-response"))
+		return handle_btm_response(bss, msg);
 
 	if (!strcmp(method, "disassoc") || !strcmp(method, "deauth"))
 		return handle_disassoc(msg);

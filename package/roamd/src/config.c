@@ -60,6 +60,7 @@ static const struct opt_desc opts[] = {
 	OPT("deny_time", OPT_U32, deny_time),
 	OPT("steer_retries", OPT_U32, steer_retries),
 	OPT("beacon_req_interval", OPT_U32, beacon_req_interval),
+	OPT("beacon_poll_interval", OPT_U32, beacon_poll_interval),
 	OPT("log_level", OPT_INT, log_level),
 	OPT("cardinal", OPT_BOOL, cardinal),
 	OPT("cardinal_window", OPT_U32, cardinal_window),
@@ -98,6 +99,7 @@ static void roam_config_init(void)
 	config.deny_time = 15000;
 	config.steer_retries = 3;
 	config.beacon_req_interval = 20000;
+	config.beacon_poll_interval = 60000;
 	config.log_level = ROAM_L_INFO;
 
 	config.cardinal = false;

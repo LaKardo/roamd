@@ -2291,7 +2291,7 @@ function renderSettings(state) {
 		lastRow.style.display = display;
 	}
 
-	var ctrlCountry = ((state.self || {}).radios || []).map(function(r) { return r.country; }).filter(function(c) { return c; })[0];
+	var ctrlCountry = ((state.self || {}).radios || []).map(function(r) { return r.country_set; }).filter(function(c) { return c; })[0];
 	var countryConfirmed = false;
 	var countrySelect = E('select', {
 		'class': 'cbi-input-select', 'disabled': readOnly || null,
@@ -2316,7 +2316,9 @@ function renderSettings(state) {
 		E('div', { 'class': 'cbi-value-field' }, [
 			countrySelect,
 			E('div', { 'class': 'cbi-value-description' },
-				_('One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty: the nodes take the region of the controller radios.'))
+				_('One region for the controller and every node. It decides which channels and how much power the radios may use. The nodes switch first, the controller last. Empty: the nodes take the region of the controller radios.')),
+			(!form.country && !ctrlCountry) ? E('div', { 'class': 'cbi-value-description', 'style': 'color:#c60' },
+				_('No region is set on the controller radios: after a reboot the radios fall back to world limits and some channels may stop working. Choose the region explicitly.')) : ''
 		])
 	]);
 

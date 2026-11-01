@@ -24,6 +24,7 @@
 #define ROAMD_MDID_LEN		4
 #define ROAMD_NO_SIGNAL		0
 #define ROAMD_MAX_NEIGHBORS	8
+#define ROAMD_MEAS_MAX		8
 
 /* RM Enabled Capabilities, octet 0 (IEEE 802.11 9.4.2.45) */
 #define RRM_BEACON_PASSIVE	0x10
@@ -112,6 +113,7 @@ struct roam_config {
 	uint32_t deny_time;
 	uint32_t steer_retries;
 	uint32_t beacon_req_interval;
+	uint32_t beacon_poll_interval;
 	int log_level;
 
 	bool cardinal;
@@ -157,6 +159,12 @@ struct roam_sta_band {
 	bool present;
 };
 
+struct roam_sta_meas {
+	uint8_t bssid[6];
+	int signal;
+	uint64_t seen;
+};
+
 struct roam_sta {
 	struct avl_node avl;
 	uint8_t addr[6];
@@ -164,6 +172,10 @@ struct roam_sta {
 
 	struct roam_sta_band band[BAND_MAX];
 	struct roam_bss *bss;
+
+	struct roam_sta_meas meas[ROAMD_MEAS_MAX];
+	uint64_t last_poll_req;
+	uint8_t poll_next;
 
 	uint64_t connected_since;
 	uint64_t last_steer;
@@ -178,6 +190,10 @@ struct roam_sta {
 	uint32_t beacon_req_silent;
 	uint32_t poll_mark;
 	uint8_t dialog_token;
+	uint8_t btm_token;
+	int btm_status;
+	uint64_t btm_sent_at;
+	uint64_t btm_status_at;
 	bool btm;
 	bool rrm;
 	uint8_t rrm_modes;
@@ -263,6 +279,12 @@ bool roam_policy_allow(struct roam_sta *sta, struct roam_bss *bss, enum roam_eve
 void roam_policy_kick(struct roam_sta *sta, struct roam_bss *from);
 void roam_policy_run(struct roam_bss *bss);
 bool roam_policy_can_steer(const struct roam_sta *sta);
+uint64_t roam_meas_fresh(void);
+bool roam_policy_btm_paused(const uint8_t *addr);
+uint32_t roam_policy_btm_rejects(const uint8_t *addr);
+uint8_t roam_policy_btm_token(struct roam_sta *sta);
+void roam_policy_btm_response(struct roam_sta *sta, struct roam_bss *bss, int token, int status,
+			      const char *target);
 
 void roam_ubus_object_init(void);
 void roam_ubus_call_local(const char *method, struct blob_attr *msg);

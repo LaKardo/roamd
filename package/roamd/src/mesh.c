@@ -1139,6 +1139,45 @@ static bool nbr_is_local(const char *bssid)
 	return false;
 }
 
+static unsigned int hex_byte(const char *s)
+{
+	unsigned int v = 0;
+
+	sscanf(s, "%2x", &v);
+
+	return v;
+}
+
+/* Remote APs of this SSID with the channel the neighbor report element gives them. */
+unsigned int mesh_neighbors_remote(const char *ssid, struct mesh_nbr_info *out, unsigned int max)
+{
+	unsigned int i, n = 0;
+
+	for (i = 0; i < mesh_nbr_n && n < max; i++) {
+		struct mesh_neighbor *nb = &mesh_nbr[i];
+		struct ether_addr *ea;
+
+		if (ssid && nb->ssid[0] && strcmp(nb->ssid, ssid))
+			continue;
+		if (nbr_is_local(nb->bssid) || strlen(nb->nr) < 26)
+			continue;
+
+		ea = ether_aton(nb->bssid);
+		if (!ea)
+			continue;
+
+		memcpy(out[n].bssid, ea->ether_addr_octet, 6);
+		out[n].op_class = hex_byte(nb->nr + 20);
+		out[n].channel = hex_byte(nb->nr + 22);
+		if (!out[n].op_class || !out[n].channel)
+			continue;
+
+		n++;
+	}
+
+	return n;
+}
+
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max)
 {
 	unsigned int i;

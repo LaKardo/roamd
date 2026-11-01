@@ -31,6 +31,7 @@ usage() {
   $0                 собрать все архитектуры
   $0 <арх> [<арх>…]  собрать только указанные
   $0 --list          показать список архитектур
+  $0 --prepare [<арх>…]  только скачать SDK и feeds (наполнение кеша)
 
 Переменные окружения:
   RELEASE   версия OpenWrt (сейчас $RELEASE)
@@ -183,6 +184,7 @@ build_arch() {
 
 	fetch_sdk "$target" "$subtarget" "$dir" || return 1
 	prepare_feeds "$dir" || { echo "  не удалось подготовить feeds" >&2; return 1; }
+	[ "$PREPARE_ONLY" = 1 ] && return 0
 
 	ln -sfn "$ROOT/package/roamd" "$dir/package/roamd"
 	ln -sfn "$ROOT/package/luci-app-roamd" "$dir/package/luci-app-roamd"
@@ -237,7 +239,13 @@ build_arch() {
 	done
 }
 
+PREPARE_ONLY=0
+
 case "${1-}" in
+--prepare)
+	PREPARE_ONLY=1
+	shift
+	;;
 --list|-l)
 	echo "Доступные архитектуры:"
 	list_targets

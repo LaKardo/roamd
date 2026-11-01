@@ -1518,7 +1518,6 @@ static bool apply_txpower(struct uci_session *u, struct blob_attr *table)
 /* The region is the same for the whole system; roamd.mesh.country remembers what we wrote. */
 static bool apply_country(struct uci_session *u, struct blob_attr *attr)
 {
-	char prev[sizeof(mesh.country)];
 	const char *want;
 
 	if (!attr)
@@ -1530,13 +1529,13 @@ static bool apply_country(struct uci_session *u, struct blob_attr *attr)
 		return false;
 	}
 
-	snprintf(prev, sizeof(prev), "%s", mesh.country);
 	if (want[0])
 		uci_session_set(u, "mesh", "country", want);
 	else
 		uci_session_delete(u, "mesh", "country");
 
-	return mesh_country_apply(want, prev);
+	/* An empty region (controllers before 1.3.5) leaves the radios as they are. */
+	return mesh_country_apply(want, NULL);
 }
 
 enum { SYS_TIMEZONE, SYS_ZONENAME, __SYS_MAX };
@@ -2309,7 +2308,8 @@ bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *nei
 		return false;
 
 	if (!roam_policy_can_steer(sta)) {
-		*reason = sta->steer_count >= config.steer_retries ?
+		*reason = roam_policy_btm_paused(sta->addr) ? "client keeps refusing, paused" :
+			  sta->steer_count >= config.steer_retries ?
 			  "steer attempts used up" : "steered moments ago";
 		return false;
 	}
@@ -2330,6 +2330,7 @@ bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *nei
 
 	blob_buf_init(&sb, 0);
 	blobmsg_add_string(&sb, "addr", sta->mac);
+	blobmsg_add_u32(&sb, "dialog_token", roam_policy_btm_token(sta));
 	blobmsg_add_u8(&sb, "disassociation_imminent", 0);
 	blobmsg_add_u32(&sb, "disassociation_timer", 0);
 	blobmsg_add_u32(&sb, "reassoc_delay", 0);
@@ -2412,6 +2413,35 @@ void mesh_self_info(struct blob_buf *b)
 	mesh_radios_dump(b, "radios");
 }
 
+/* Fresh measurements of the client towards the access points of other devices. */
+static void node_meas_blob(struct blob_buf *b, const struct roam_sta *sta)
+{
+	void *arr = NULL;
+	unsigned int i;
+
+	for (i = 0; i < ROAMD_MEAS_MAX; i++) {
+		const struct roam_sta_meas *m = &sta->meas[i];
+		char bssid[18];
+		void *e;
+
+		if (!m->seen || roam_now - m->seen > roam_meas_fresh())
+			continue;
+
+		if (!arr)
+			arr = blobmsg_open_array(b, "reports");
+
+		roam_mac_str(m->bssid, bssid, sizeof(bssid));
+		e = blobmsg_open_table(b, NULL);
+		blobmsg_add_string(b, "bssid", bssid);
+		blobmsg_add_u32(b, "signal", (uint32_t)m->signal);
+		blobmsg_add_u32(b, "age", (roam_now - m->seen) / 1000);
+		blobmsg_close_table(b, e);
+	}
+
+	if (arr)
+		blobmsg_close_array(b, arr);
+}
+
 void mesh_node_report(struct blob_buf *b)
 {
 	struct sysinfo si;
@@ -2454,6 +2484,14 @@ void mesh_node_report(struct blob_buf *b)
 
 				blobmsg_add_u32(b, "signal", sta->band[sta->bss->band].signal);
 				blobmsg_add_string(b, "ssid", sta->bss->ssid);
+				if (sta->btm_status_at) {
+					blobmsg_add_u32(b, "btm_status", (uint32_t)sta->btm_status);
+					blobmsg_add_u32(b, "btm_age",
+							(roam_now - sta->btm_status_at) / 1000);
+				}
+				if (roam_policy_btm_paused(sta->addr))
+					blobmsg_add_u8(b, "btm_paused", 1);
+				node_meas_blob(b, sta);
 
 				for (band = 0; band < BAND_MAX; band++) {
 					uint32_t age = 0;
