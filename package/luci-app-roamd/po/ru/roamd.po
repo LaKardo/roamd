@@ -46,8 +46,8 @@ msgstr "Переход между диапазонами без повторно
 msgid "802.11r over the distribution system"
 msgstr "802.11r через проводную сеть"
 
-msgid "Perform the fast transition over the wired side instead of over the air."
-msgstr "Выполнять быстрый переход по проводной сети, а не по эфиру."
+msgid "Perform the fast transition over the wired side instead of over the air. Many phones handle it poorly; leave it off unless needed."
+msgstr "Выполнять быстрый переход по проводной сети, а не по эфиру. Многие телефоны работают с этим режимом плохо; не включайте без необходимости."
 
 msgid "Mobility domain"
 msgstr "Домен мобильности"
@@ -75,6 +75,30 @@ msgstr "Настраивать Wi-Fi автоматически"
 
 msgid "Write the 802.11k/v/r options into the wireless configuration. Turn this off to manage them by hand."
 msgstr "Записывать параметры 802.11k/v/r в конфигурацию Wi-Fi. Отключите, чтобы настраивать их вручную."
+
+msgid "Drop silent clients after"
+msgstr "Отключать молчащих клиентов через"
+
+msgid "Seconds. An access point checks a client that has been silent this long and disconnects it if it does not answer, so a device that left Wi-Fi drops off the list sooner. Empty keeps the setting of each access point (300 s by default); 90 is recommended. Applying a new value restarts Wi-Fi once. Needs “Configure wireless automatically”."
+msgstr "Секунды. Точка доступа проверяет клиента, который молчит столько времени, и отключает его, если он не ответил, — ушедшее из Wi-Fi устройство быстрее пропадает из списка. Пусто — оставить настройку каждой точки (по умолчанию 300 с); рекомендуется 90. Применение нового значения один раз перезапускает Wi-Fi. Нужна «Настраивать Wi-Fi автоматически»."
+
+msgid "inactive"
+msgstr "неактивен"
+
+msgid "inactive %d s"
+msgstr "неактивен %d с"
+
+msgid "seen %d min ago"
+msgstr "был %d мин назад"
+
+msgid "seen %d h ago"
+msgstr "был %d ч назад"
+
+msgid "seen %d d ago"
+msgstr "был %d дн назад"
+
+msgid "Last seen"
+msgstr "Последний раз"
 
 msgid "Switching parameters"
 msgstr "Параметры переключения"
@@ -451,6 +475,15 @@ msgstr "точки ещё не обменялись отчётами о сосе
 # Mesh Wi-Fi system
 msgid "802.11r differs"
 msgstr "802.11r различается"
+
+msgid "Wi-Fi networks differ from the controller"
+msgstr "сети Wi-Fi не совпадают с контроллером"
+
+msgid "backhaul network differs from the controller"
+msgstr "транспортная сеть не совпадает с контроллером"
+
+msgid "the switch of the node tags the whole cable, a segment only goes over the air"
+msgstr "коммутатор узла тегирует весь кабель, сегмент идёт только по воздуху"
 
 msgid "A capture is already in progress."
 msgstr "Захват уже выполняется."
@@ -1382,12 +1415,6 @@ msgstr "SSH не поднялся после перезапуска"
 
 msgid "SSH is limited to the lan interface — it will be opened during capture"
 msgstr "SSH ограничен интерфейсом lan — будет открыт при захвате"
-
-msgid "held on the preferred band"
-msgstr "удержание на предпочитаемом диапазоне"
-
-msgid "released from the preferred band"
-msgstr "снятие удержания"
 
 msgid "%s GHz radio is down: the channel may be forbidden in region %s"
 msgstr "Радио %s ГГц не работает: возможно, канал запрещён в регионе %s"

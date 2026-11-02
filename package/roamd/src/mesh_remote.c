@@ -51,6 +51,9 @@ int mesh_run(char *const argv[], int in_fd, char *out, size_t len, int timeout_m
 		return -1;
 	}
 
+	if (pid)
+		roam_stats.forks++;
+
 	if (!pid) {
 		int null_rd = in_fd < 0 ? open("/dev/null", O_RDONLY) : -1;
 		int null_wr = open("/dev/null", O_WRONLY);

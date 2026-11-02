@@ -53,8 +53,9 @@ enum mesh_event_type {
 	MESH_EV_KICK,
 	MESH_EV_DENY_NODE,
 	MESH_EV_DENY_BAND,
-	MESH_EV_CARDINAL_ON,
-	MESH_EV_CARDINAL_OFF
+	/* takes the value of the removed cardinal-on; old log lines with 7 or 8 read as unknown */
+	MESH_EV_UNKNOWN,
+	__MESH_EV_MAX
 };
 
 struct mesh_event {
@@ -159,7 +160,6 @@ extern struct mesh_config mesh;
 void mesh_config_init(void);
 void mesh_config_apply(struct uci_context *ctx, struct uci_section *s);
 void mesh_member_load(struct uci_context *ctx, struct uci_section *s);
-struct mesh_member *mesh_member_by_name(const char *name);
 void mesh_members_clear(void);
 void mesh_start(void);
 
@@ -215,10 +215,10 @@ bool mesh_link_del(const char *name);
 bool mesh_link_exists(const char *name);
 bool mesh_link_enslave(const char *parent, int vid, const char *name, const char *bridge);
 
-bool mesh_bridge_wired_port(const char *bridge, char *out, size_t len);
 bool mesh_bridge_lan(char *out, size_t len);
 unsigned int mesh_bridge_ports(const char *bridge, char out[][IFNAMSIZ], unsigned int max);
-bool mesh_parent_reachable(const char *member_id, const char *nodes);
+bool mesh_parent_reachable(const char *member_id, const char *nodes, const char *parents);
+void mesh_parents_build(char *out, size_t len);
 bool mesh_chain_has(const char *chain, const char *id);
 
 typedef void (*mesh_rpc_cb)(void *priv, struct blob_attr *result, bool ok);
@@ -253,6 +253,15 @@ bool mesh_pkg_refresh(const char *branch, const char *arch, const char *name,
 bool mesh_pkg_known(const char *branch, const char *arch, const char *name,
 		    struct mesh_pkg_meta *out);
 bool mesh_pkg_stale(const char *branch, const char *arch, const char *name);
+void mesh_pkg_viewed(void);
+bool mesh_pkg_wanted(void);
+
+struct blob_attr *mesh_attr_field(struct blob_attr *table, const char *name, int type);
+struct blob_attr *mesh_root_field(struct blob_buf *b, const char *name, int type);
+const char *mesh_attr_str(struct blob_attr *table, const char *name);
+const char *mesh_root_str(struct blob_buf *b, const char *name);
+uint32_t mesh_attr_u32(struct blob_attr *table, const char *name);
+uint64_t mesh_attr_num(struct blob_attr *table, const char *name);
 int mesh_pkg_newer(const char *have, const char *want);
 bool mesh_pkg_path(const char *branch, const char *arch, const char *name, char *out, size_t len);
 bool mesh_pkg_download(const char *branch, const char *arch, const char *name,
@@ -299,7 +308,7 @@ bool mesh_self_release(char *branch, size_t bl, char *arch, size_t al);
 void mesh_self_check(void);
 int mesh_self_update(const char *task);
 int mesh_node_update_task(const char *addr, const char *task);
-int mesh_autoupdate_task(const char *phase, const char *task);
+int mesh_autoupdate_task(const char *task);
 int mesh_update_nodes(const char *task, bool updated);
 bool mesh_self_check_busy(void);
 void mesh_unquote(char *s);
@@ -347,21 +356,20 @@ void mesh_ubus_reload(void);
 bool mesh_ubus_call(const char *method, const char *json);
 
 void mesh_poll_run(bool force);
-bool mesh_poll_busy(void);
 bool mesh_poll_has_place(const uint8_t *addr);
 
 void mesh_seg_links_sync(void);
 bool mesh_seg_node_apply(void);
-bool mesh_seg_node_drop(void);
 const char *mesh_seg_node_issue(void);
 const char *mesh_seg_node_trunk(void);
 bool mesh_member_state(const char *id, const char *field, char *out, size_t len);
 bool mesh_seg_usable(uint16_t vid);
-void mesh_seg_node_penalise(uint64_t until);
 void mesh_profile_build(struct blob_buf *b);
 void mesh_backhaul_bss_set(bool up);
 
 #define MESH_ASSOC_MAX	128
+/* a station silent this long (ms) is shown as inactive and is not steered */
+#define MESH_CLIENT_IDLE	60000
 
 struct mesh_assoc {
 	uint8_t addr[6];
@@ -370,6 +378,7 @@ struct mesh_assoc {
 	uint32_t width;
 	uint32_t nss;
 	uint32_t connected;
+	uint32_t inactive;
 	uint64_t rx_bytes;
 	uint64_t tx_bytes;
 	char std[8];
@@ -388,6 +397,7 @@ struct mesh_assoc_idx {
 char *mesh_slurp(const char *path, size_t max);
 
 #define MESH_BRPORT_MAX	16
+#define MESH_BRIDGE	"br-lan"
 
 struct mesh_uplink {
 	char ifname[16];
@@ -395,6 +405,35 @@ struct mesh_uplink {
 };
 
 bool mesh_bridge_port_of(const uint8_t *mac, struct mesh_uplink *out);
+
+void mesh_bh_scan(void (*heard)(const char *bssid, int signal), void (*done)(void));
+
+/* what "iw dev X link" says about a station interface */
+struct mesh_iw_link {
+	char bssid[MESH_MAC_MAX];
+	int signal;
+	int freq;
+	char rx_bitrate[128];
+};
+
+/*
+ * How the node reaches the controller, read once per report. The controller
+ * has no uplink of its own and is reported as wired without running iw.
+ */
+struct mesh_uplink_state {
+	const char *connection;
+	bool air;
+	struct mesh_iw_link link;
+};
+
+bool mesh_uplink_any(struct mesh_iw_link *l);
+bool mesh_node_uplink(struct mesh_uplink *up);
+bool mesh_node_wired_uplink(void);
+void mesh_uplink_phy(const char *line, char *std, size_t len, unsigned int *nss,
+		     unsigned int *width);
+void mesh_uplink_read(struct mesh_uplink_state *s);
+const char *mesh_freq_band(int freq);
+const char *mesh_node_uplink_band(void);
 void mesh_wired_collect(struct mesh_assoc_idx *idx, const uint8_t *parent);
 bool mesh_parent_mac(uint8_t *out);
 void mesh_bridge_wifi_cost(void);
@@ -416,6 +455,7 @@ struct mesh_task {
 
 pid_t mesh_spawn(const char *script, const char *arg1, const char *arg2);
 #define MESH_RUN_DIR		"/var/run/roamd"
+#define MESH_MEMBERS_RUN	MESH_RUN_DIR "/members"
 #define MESH_RC_COMMON		"/etc/rc.common"
 #define MESH_TASK_MAX		8192
 #define MESH_ACQUIRE_DIR	"/var/run/roamd/acquire"
@@ -440,9 +480,6 @@ void mesh_assoc_blob(struct blob_buf *b, const struct mesh_assoc *a);
 void mesh_clients_dump(struct blob_buf *b);
 unsigned int mesh_clients_count(void);
 unsigned int mesh_clients_local(void);
-typedef void (*mesh_client_cb)(const uint8_t *addr, const char *mac, const char *node,
-			       const int *sig, const uint32_t *sig_age, void *priv);
-void mesh_clients_each(mesh_client_cb cb, void *priv);
 bool mesh_client_forget(const char *mac);
 void mesh_clients_load(void);
 void mesh_clients_save(void);
@@ -459,6 +496,7 @@ struct mesh_nbr_info {
 unsigned int mesh_neighbors_remote(const char *ssid, struct mesh_nbr_info *out, unsigned int max);
 
 void mesh_neighbors_set(struct blob_attr *arr);
+unsigned int mesh_neighbors_count(void);
 void mesh_neighbors_append(struct blob_buf *b, const char *ssid, int *count, int max);
 void mesh_peer_clients_set(struct blob_attr *arr);
 bool mesh_peer_client(const uint8_t *addr);
@@ -490,6 +528,7 @@ bool mesh_member_set(const char *id, const char *name, const char *nodes,
 		     struct blob_attr **radio);
 
 bool mesh_node_apply(struct blob_attr *msg);
+bool mesh_node_profile_write(struct blob_attr *msg);
 void mesh_node_report(struct blob_buf *b);
 void mesh_self_info(struct blob_buf *b);
 void mesh_node_diag(struct blob_buf *b);
@@ -498,10 +537,26 @@ bool mesh_node_steer(const char *macstr, const char *node, struct blob_attr *nei
 bool mesh_node_drop(const char *macstr);
 void mesh_node_touch(void);
 uint32_t mesh_node_contact_age(void);
+uint64_t mesh_node_last_contact(void);
+bool mesh_node_contact_lost(void);
+
+void mesh_bh_restore(void);
+bool mesh_bh_link_check(void);
+bool mesh_bh_step(bool alive);
+void mesh_bh_relay(bool relay);
+void mesh_bh_limit_enforce(void);
+void mesh_bh_profile_applied(void);
+void mesh_bh_blob(struct blob_buf *b);
+const char *mesh_bh_uplink_port(void);
+
 void mesh_node_watch_start(void);
 void mesh_node_dumbap(void);
 bool mesh_icmp_ping(const char *addr, int timeout_ms);
 int mesh_net_apply(const char *bridge, const char *controller);
+bool mesh_cmd_line(const char *cmd, char *buf, size_t len);
+void mesh_node_led_set(bool on);
+bool mesh_node_creds_apply(struct blob_attr *cred);
+void mesh_node_watch_blob(struct blob_buf *b);
 
 void mesh_log_local(const char *mac, uint8_t from_band, uint8_t to_band, const char *to_node,
 		    enum mesh_event_type type);

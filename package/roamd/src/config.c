@@ -65,6 +65,7 @@ static const struct opt_desc opts[] = {
 	OPT("steer_retries", OPT_U32, steer_retries),
 	OPT("beacon_req_interval", OPT_U32, beacon_req_interval),
 	OPT("beacon_poll_interval", OPT_U32, beacon_poll_interval),
+	OPT("max_inactivity", OPT_U32, max_inactivity),
 	OPT("log_level", OPT_INT, log_level)
 };
 
@@ -77,7 +78,7 @@ static void roam_config_init(void)
 	config.enabled = true;
 	config.band_steering = true;
 	config.fast_transition = true;
-	config.ft_over_ds = true;
+	config.ft_over_ds = false;
 	config.neighbor_reports = true;
 	config.bss_transition = true;
 	config.apply_wireless = true;
@@ -389,6 +390,8 @@ static void config_sanitize(void)
 		config.age_time = config.hold_time * 3;
 	if (!config.steer_retries)
 		config.steer_retries = 1;
+	if (config.max_inactivity && config.max_inactivity < 30)
+		config.max_inactivity = 30;
 }
 
 bool uci_session_open(struct uci_session *s, const char *package)
@@ -478,15 +481,6 @@ void uci_session_add_list(struct uci_session *s, const char *section,
 		s->dirty = true;
 }
 
-void uci_session_del_list(struct uci_session *s, const char *section,
-			  const char *option, const char *value)
-{
-	if (uci_del_list(s->ctx, &(struct uci_ptr){
-		.package = s->name, .section = section,
-		.option = option, .value = value }) == UCI_OK)
-		s->dirty = true;
-}
-
 bool uci_session_delete(struct uci_session *s, const char *section, const char *option)
 {
 	struct uci_ptr ptr = { .package = s->name, .section = section, .option = option };
@@ -507,8 +501,10 @@ void uci_session_close(struct uci_session *s)
 	if (!s->ctx)
 		return;
 
-	if (s->dirty)
+	if (s->dirty) {
+		roam_stats.commits++;
 		uci_commit(s->ctx, &s->pkg, false);
+	}
 
 	uci_free_context(s->ctx);
 	s->ctx = NULL;

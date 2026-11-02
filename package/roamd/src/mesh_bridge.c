@@ -303,6 +303,8 @@ void mesh_wired_collect(struct mesh_assoc_idx *idx, const uint8_t *parent)
 			memset(a, 0, sizeof(*a));
 			memcpy(a->addr, v.fdb[i].mac, 6);
 			a->wired = true;
+			/* brforward ageing is in clock ticks (USER_HZ, 1/100 s) */
+			a->inactive = v.fdb[i].ageing * 10;
 		}
 	}
 
@@ -354,24 +356,6 @@ unsigned int mesh_bridge_ports(const char *bridge, char out[][IFNAMSIZ], unsigne
 	closedir(d);
 
 	return n;
-}
-
-bool mesh_bridge_wired_port(const char *bridge, char *out, size_t len)
-{
-	char ports[MESH_BRPORT_MAX][IFNAMSIZ];
-	unsigned int n = mesh_bridge_ports(bridge, ports, MESH_BRPORT_MAX);
-	unsigned int i;
-
-	for (i = 0; i < n; i++) {
-		if (sys_flag(ports[i], "phy80211"))
-			continue;
-
-		snprintf(out, len, "%s", ports[i]);
-
-		return true;
-	}
-
-	return false;
 }
 
 static void sys_write(const char *ifname, const char *node, const char *value)

@@ -223,7 +223,7 @@ void mesh_member_pkg_source(const char *id, const char *source)
 	char path[160];
 	FILE *f;
 
-	snprintf(path, sizeof(path), "/var/run/roamd/members/%s.pkgsrc", id);
+	snprintf(path, sizeof(path), MESH_MEMBERS_RUN "/%s.pkgsrc", id);
 	f = fopen(path, "w");
 	if (!f)
 		return;

@@ -153,6 +153,13 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 		uci_session_set(u, s->e.name, settings[i].name, settings[i].value);
 	}
 
+	if (config.max_inactivity && strncmp(s->e.name, MESH_BH_PREFIX, strlen(MESH_BH_PREFIX))) {
+		char v[12];
+
+		snprintf(v, sizeof(v), "%u", config.max_inactivity);
+		uci_session_set(u, s->e.name, "max_inactivity", v);
+	}
+
 	if (rrb) {
 		char nasid[MESH_NASID_MAX];
 		uint8_t band = mesh_radio_band(u->ctx, u->pkg,
@@ -164,14 +171,47 @@ static void iface_provision(struct uci_session *u, struct uci_section *s)
 	}
 }
 
-void roam_network_reload(void)
+#define RELOAD_DELAY	500
+
+static struct uloop_timeout reload_timer;
+static char reload_reasons[160];
+
+static void reload_cb(struct uloop_timeout *t)
 {
 	uint32_t id;
+
+	if (!reload_reasons[0])
+		return;
+
+	roam_stats.reloads++;
+	roam_log(ROAM_L_INFO, "roamd: network reload (%s), %u since start", reload_reasons,
+		 roam_stats.reloads);
+	reload_reasons[0] = 0;
 
 	if (ubus_lookup_id(ubus_ctx, "network", &id))
 		return;
 
 	ubus_invoke(ubus_ctx, id, "reload", NULL, NULL, NULL, 1000);
+}
+
+/* changes made within RELOAD_DELAY of each other share one reload */
+void roam_network_reload(const char *reason)
+{
+	size_t used = strlen(reload_reasons);
+
+	if (!strstr(reload_reasons, reason))
+		snprintf(reload_reasons + used, sizeof(reload_reasons) - used, "%s%s",
+			 used ? ", " : "", reason);
+
+	reload_timer.cb = reload_cb;
+	if (!reload_timer.pending)
+		uloop_timeout_set(&reload_timer, RELOAD_DELAY);
+}
+
+void roam_network_reload_flush(void)
+{
+	uloop_timeout_cancel(&reload_timer);
+	reload_cb(&reload_timer);
 }
 
 void roam_wireless_apply(void)
@@ -199,6 +239,5 @@ void roam_wireless_apply(void)
 	if (!changed)
 		return;
 
-	roam_log(ROAM_L_INFO, "roamd: wireless configuration updated, reloading network");
-	roam_network_reload();
+	roam_network_reload("802.11k/v/r options");
 }

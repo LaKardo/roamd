@@ -12,6 +12,7 @@
 
 struct avl_tree roam_sta_tree;
 uint64_t roam_now;
+struct roam_stats roam_stats;
 
 void roam_time_update(void)
 {

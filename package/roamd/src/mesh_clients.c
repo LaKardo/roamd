@@ -11,7 +11,6 @@
 #include "mesh.h"
 
 #define MESH_CLIENT_MAX	256
-#define MEMBERS_DIR	"/var/run/roamd/members"
 
 struct client_rec {
 	uint8_t addr[6];
@@ -25,6 +24,7 @@ struct client_rec {
 	uint32_t width;
 	uint32_t nss;
 	uint32_t connected;
+	uint32_t inactive;
 	uint64_t rx_bytes;
 	uint64_t tx_bytes;
 	uint32_t last_seen;
@@ -32,31 +32,24 @@ struct client_rec {
 	uint32_t sig_age[BAND_MAX];
 	uint8_t state;
 	bool wired;
+	bool idle;
 	bool used;
 	char host[MESH_NAME_MAX];
 	char ip[16];
 };
 
-static uint64_t num_field(struct blob_attr *table, const char *name)
+static void inactive_set(struct client_rec *c, uint32_t inactive)
 {
-	struct blob_attr *pos;
-	size_t rem;
+	bool idle = !c->wired && inactive >= MESH_CLIENT_IDLE;
 
-	blobmsg_for_each_attr(pos, table, rem) {
-		if (strcmp(blobmsg_name(pos), name))
-			continue;
-
-		switch (blobmsg_type(pos)) {
-		case BLOBMSG_TYPE_INT64: return blobmsg_get_u64(pos);
-		case BLOBMSG_TYPE_INT32: return blobmsg_get_u32(pos);
-		case BLOBMSG_TYPE_INT16: return blobmsg_get_u16(pos);
-		case BLOBMSG_TYPE_INT8: return blobmsg_get_u8(pos);
-		case BLOBMSG_TYPE_DOUBLE: return (uint64_t)blobmsg_get_double(pos);
-		}
-		break;
+	if (idle && !c->idle) {
+		roam_stats.idle_marks++;
+		roam_log(ROAM_L_DEBUG, "mesh: %s on %s idle for %u s", c->mac, c->node,
+			 inactive / 1000);
 	}
 
-	return 0;
+	c->idle = idle;
+	c->inactive = inactive;
 }
 
 enum client_state {
@@ -125,6 +118,7 @@ static void client_touch(struct client_rec *c, const char *node, const char *ban
 		strncpy(c->std, std, sizeof(c->std) - 1);
 	c->wired = false;
 	c->connected = 0;
+	c->inactive = 0;
 	c->rate = rate;
 	c->width = width;
 	c->nss = nss;
@@ -197,8 +191,9 @@ static void refresh_local(uint32_t now)
 		}
 
 		c->connected = a->connected;
-		c->rx_rate = a->rx_rate;
 		c->wired = a->wired;
+		inactive_set(c, a->inactive);
+		c->rx_rate = a->rx_rate;
 		strncpy(c->enc, a->enc, sizeof(c->enc) - 1);
 	}
 
@@ -226,7 +221,7 @@ static void refresh_member(const char *id, uint32_t now)
 	char path[128], *data;
 	int rem;
 
-	snprintf(path, sizeof(path), "%s/%s.json", MEMBERS_DIR, id);
+	snprintf(path, sizeof(path), "%s/%s.json", MESH_MEMBERS_RUN, id);
 	data = mesh_slurp(path, MESH_REPORT_MAX);
 	if (!data)
 		return;
@@ -264,7 +259,7 @@ static void refresh_member(const char *id, uint32_t now)
 		if (!ea)
 			continue;
 
-		connected = num_field(cur, "connected");
+		connected = mesh_attr_num(cur, "connected");
 
 		rec = client_upsert(ea->ether_addr_octet, blobmsg_get_string(c[CL_MAC]));
 		if (!rec || !client_claimable(rec, connected))
@@ -272,21 +267,22 @@ static void refresh_member(const char *id, uint32_t now)
 
 		client_touch(rec, id,
 			     c[CL_BAND] ? blobmsg_get_string(c[CL_BAND]) : NULL,
-			     num_field(cur, "rate"),
+			     mesh_attr_num(cur, "rate"),
 			     c[CL_STD] ? blobmsg_get_string(c[CL_STD]) : NULL,
-			     num_field(cur, "width"), num_field(cur, "nss"),
-			     num_field(cur, "rx_bytes"), num_field(cur, "tx_bytes"), now);
+			     mesh_attr_num(cur, "width"), mesh_attr_num(cur, "nss"),
+			     mesh_attr_num(cur, "rx_bytes"), mesh_attr_num(cur, "tx_bytes"), now);
 		rec->connected = connected;
-		rec->rx_rate = (uint32_t)num_field(cur, "rx_rate");
 		rec->wired = c[CL_WIRED] && blobmsg_get_u8(c[CL_WIRED]);
+		inactive_set(rec, (uint32_t)mesh_attr_num(cur, "inactive"));
+		rec->rx_rate = (uint32_t)mesh_attr_num(cur, "rx_rate");
 		rec->enc[0] = '\0';
 		if (c[CL_ENC])
 			strncpy(rec->enc, blobmsg_get_string(c[CL_ENC]), sizeof(rec->enc) - 1);
 
-		rec->sig[BAND_LOW] = (int)num_field(cur, "signal_24");
-		rec->sig[BAND_HIGH] = (int)num_field(cur, "signal_5");
-		rec->sig_age[BAND_LOW] = (uint32_t)num_field(cur, "signal_24_age");
-		rec->sig_age[BAND_HIGH] = (uint32_t)num_field(cur, "signal_5_age");
+		rec->sig[BAND_LOW] = (int)mesh_attr_num(cur, "signal_24");
+		rec->sig[BAND_HIGH] = (int)mesh_attr_num(cur, "signal_5");
+		rec->sig_age[BAND_LOW] = (uint32_t)mesh_attr_num(cur, "signal_24_age");
+		rec->sig_age[BAND_HIGH] = (uint32_t)mesh_attr_num(cur, "signal_5_age");
 	}
 
 	node_settle(id);
@@ -445,11 +441,20 @@ static bool node_known(const char *id)
 	return false;
 }
 
+#define CLIENTS_FRESH	2000
+
+/* status and the client list are asked together by LuCI, one read of the reports serves both */
 static void clients_refresh(void)
 {
+	static uint64_t done_at;
 	struct mesh_member *m;
 	uint32_t now = (uint32_t)time(NULL);
 	unsigned int i;
+
+	roam_time_update();
+	if (done_at && roam_now - done_at < CLIENTS_FRESH)
+		return;
+	done_at = roam_now;
 
 	for (i = 0; i < MESH_CLIENT_MAX; i++) {
 		if (clients[i].used && mac_skip(clients[i].addr)) {
@@ -486,20 +491,6 @@ unsigned int mesh_clients_count(void)
 			n++;
 
 	return n;
-}
-
-void mesh_clients_each(mesh_client_cb cb, void *priv)
-{
-	unsigned int i;
-
-	clients_refresh();
-
-	for (i = 0; i < MESH_CLIENT_MAX; i++) {
-		const struct client_rec *c = &clients[i];
-
-		if (c->used && c->state == CLIENT_ONLINE && !c->wired && c->band[0])
-			cb(c->addr, c->mac, c->node, c->sig, c->sig_age, priv);
-	}
 }
 
 unsigned int mesh_clients_local(void)
@@ -670,7 +661,11 @@ void mesh_clients_dump(struct blob_buf *b)
 		}
 
 		blobmsg_add_u32(b, "last_seen", c->last_seen);
-		blobmsg_add_string(b, "state", state_name[c->state]);
+		if (c->state == CLIENT_ONLINE && c->inactive)
+			blobmsg_add_u32(b, "inactive", c->inactive);
+		blobmsg_add_string(b, "state",
+				   c->state == CLIENT_ONLINE && c->inactive >= MESH_CLIENT_IDLE ?
+				   "idle" : state_name[c->state]);
 		blobmsg_close_table(b, e);
 	}
 	blobmsg_close_array(b, arr);

@@ -24,7 +24,6 @@
 #define MESH_LEASE_PREFIX	"roamd_"
 #define CANDIDATES	"/var/run/roamd/candidates.json"
 #define SELFCHECK	"/var/run/roamd/selfcheck.json"
-#define MEMBERS_DIR	"/var/run/roamd/members"
 #define MESH_POLL_INTERVAL	15000
 #define TASK_STALE	180
 #define AUTOUPDATE_SETTLE	60000
@@ -193,16 +192,6 @@ static bool acquire_spawn(const char *script, const char *sub, const char *arg,
 {
 	char *argv[7];
 	unsigned int n = 0;
-
-	if (!sub) {
-		argv[n++] = "/bin/sh";
-		argv[n++] = (char *)script;
-		argv[n++] = (char *)(arg ? arg : "");
-		argv[n++] = acquire_task;
-		argv[n] = NULL;
-
-		return mesh_task_run(&acquire_job, argv);
-	}
 
 	argv[n++] = (char *)script;
 	argv[n++] = (char *)sub;
@@ -560,7 +549,7 @@ void mesh_member_live(const char *id, struct blob_buf *b)
 {
 	char path[128], *data;
 
-	snprintf(path, sizeof(path), "%s/%s.json", MEMBERS_DIR, id);
+	snprintf(path, sizeof(path), "%s/%s.json", MESH_MEMBERS_RUN, id);
 	data = mesh_valid_id(id) ? mesh_slurp(path, MESH_REPORT_MAX) : NULL;
 	if (data && blobmsg_add_json_from_string(b, data)) {
 		free(data);
@@ -639,7 +628,7 @@ void mesh_ctrl_txpower_apply(void)
 		return;
 
 	if (mesh_txpower_apply(mesh.txpower, known ? applied : mesh.txpower))
-		roam_network_reload();
+		roam_network_reload("transmit power");
 
 	memcpy(applied, mesh.txpower, sizeof(applied));
 	known = true;
@@ -673,7 +662,7 @@ void mesh_ctrl_radio_apply(bool nodes_done)
 	changed = mesh_channel_apply(mesh.channel, mesh.width, known ? ch_applied : mesh.channel, 0) ||
 		  changed;
 	if (changed)
-		roam_network_reload();
+		roam_network_reload("region or channels");
 
 	snprintf(applied, sizeof(applied), "%s", mesh.country);
 	memcpy(ch_applied, mesh.channel, sizeof(ch_applied));
@@ -715,7 +704,7 @@ bool mesh_member_remove(const char *id)
 	if (sec && uci_session_delete(&u, sec->e.name, NULL)) {
 		char path[128];
 
-		snprintf(path, sizeof(path), "%s/%s.json", MEMBERS_DIR, id);
+		snprintf(path, sizeof(path), "%s/%s.json", MESH_MEMBERS_RUN, id);
 		unlink(path);
 		snprintf(path, sizeof(path), "/etc/roamd/members/%s.crt", id);
 		unlink(path);

@@ -13,6 +13,11 @@ set(SOURCES
 	policy.c
 	pair.c
 	mesh.c
+	mesh_nbr.c
+	mesh_assoc.c
+	mesh_radio.c
+	mesh_util.c
+	mesh_task.c
 	mesh_ctrl.c
 	mesh_networks.c
 	mesh_segment.c
@@ -30,6 +35,13 @@ set(SOURCES
 	mesh_vlan.c
 	mesh_profile.c
 	mesh_node.c
+	mesh_bh.c
+	mesh_node_apply.c
+	mesh_node_led.c
+	mesh_node_creds.c
+	mesh_uplink.c
+	mesh_node_report.c
+	mesh_bh_scan.c
 	mesh_bridge.c
 	mesh_clients.c
 	mesh_log.c
@@ -38,6 +50,7 @@ set(SOURCES
 	sha256.c
 	mesh_remote.c
 	mesh_http.c
+	mesh_blob.c
 )
 
 add_executable(roamd ${SOURCES})

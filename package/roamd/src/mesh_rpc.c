@@ -43,9 +43,51 @@ struct rpc_req {
 	bool retried;
 	bool retry_now;
 	bool relogin;
+	bool refused;
 };
 
 static struct rpc_session sessions[MESH_ALLOW_MAX];
+
+/* one log line when a node starts failing and one when it answers again */
+static struct {
+	char id[MESH_ID_MAX];
+	uint32_t fails;
+} health[MESH_ALLOW_MAX];
+
+static void health_note(const struct rpc_req *r, bool ok)
+{
+	unsigned int i, slot = ARRAY_SIZE(health);
+
+	roam_stats.rpc_calls++;
+	if (!ok)
+		roam_stats.rpc_fails++;
+
+	for (i = 0; i < ARRAY_SIZE(health); i++) {
+		if (!strcmp(health[i].id, r->id)) {
+			slot = i;
+			break;
+		}
+		if (slot == ARRAY_SIZE(health) && !health[i].id[0])
+			slot = i;
+	}
+
+	if (slot == ARRAY_SIZE(health))
+		return;
+
+	if (!ok) {
+		if (!health[slot].fails++)
+			roam_log(ROAM_L_ERR, "mesh: %s at %s failed (%s), further failures not logged",
+				 r->method, r->id, r->addr);
+		snprintf(health[slot].id, sizeof(health[slot].id), "%s", r->id);
+		return;
+	}
+
+	if (health[slot].fails && !strcmp(health[slot].id, r->id)) {
+		roam_log(ROAM_L_INFO, "mesh: %s answers again after %u failed call(s)",
+			 r->id, health[slot].fails);
+		health[slot].fails = 0;
+	}
+}
 
 static struct rpc_session *session_slot(const char *id, bool create)
 {
@@ -149,6 +191,10 @@ static void finish_cb(struct uloop_timeout *t)
 			return;
 	}
 
+	conn_drop(r);
+
+	health_note(r, r->ok || r->refused);
+
 	if (r->cb)
 		r->cb(r->priv, r->ok ? r->result : NULL, r->ok);
 
@@ -196,8 +242,9 @@ static void resp_parse(struct rpc_req *r)
 			error = cur;
 	}
 
+	/* an expired or unknown session comes back as a JSON-RPC error: log in once more */
 	if (error || !result || blobmsg_type(result) != BLOBMSG_TYPE_ARRAY) {
-		if (!r->retried && !r->login) {
+		if (error && !r->retried && !r->login) {
 			req_retry(r);
 			return;
 		}
@@ -208,11 +255,9 @@ static void resp_parse(struct rpc_req *r)
 
 	blobmsg_for_each_attr(cur, result, rem) {
 		if (blobmsg_type(cur) == BLOBMSG_TYPE_INT32 && blobmsg_get_u32(cur)) {
-			if (!r->retried && !r->login) {
-				req_retry(r);
-				return;
-			}
-
+			roam_log(ROAM_L_DEBUG, "mesh: %s on %s returned status %u", r->method, r->id,
+				 blobmsg_get_u32(cur));
+			r->refused = true;
 			req_done(r, NULL, false);
 			return;
 		}
@@ -324,6 +369,7 @@ static bool body_build(struct rpc_req *r, char *out, size_t len)
 {
 	const char *sid = session_get(r->id);
 	char token[64];
+	int n;
 
 	if (r->login) {
 		if (!token_read(r->id, token, sizeof(token)))
@@ -340,10 +386,16 @@ static bool body_build(struct rpc_req *r, char *out, size_t len)
 	if (!sid)
 		return false;
 
-	snprintf(out, len,
-		 "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"call\",\"params\":"
-		 "[\"%s\",\"%s\",\"%s\",%s]}", sid, r->object, r->method,
-		 r->args && r->args[0] ? r->args : "{}");
+	n = snprintf(out, len,
+		     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"call\",\"params\":"
+		     "[\"%s\",\"%s\",\"%s\",%s]}", sid, r->object, r->method,
+		     r->args && r->args[0] ? r->args : "{}");
+
+	if (n < 0 || (size_t)n >= len) {
+		roam_log(ROAM_L_ERR, "mesh: %s to %s not sent, request too large (%d bytes)",
+			 r->method, r->id, n);
+		return false;
+	}
 
 	return true;
 }
@@ -422,6 +474,7 @@ bool mesh_rpc_call(const char *id, const char *addr, const char *object,
 	if (req_start(r))
 		return true;
 
+	conn_drop(r);
 	free(r->args);
 	free(r);
 

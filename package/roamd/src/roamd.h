@@ -118,6 +118,7 @@ struct roam_config {
 	uint32_t steer_retries;
 	uint32_t beacon_req_interval;
 	uint32_t beacon_poll_interval;
+	uint32_t max_inactivity;
 	int log_level;
 };
 
@@ -235,15 +236,14 @@ struct uci_section *uci_session_find(struct uci_session *s, const char *type,
 struct uci_section *uci_session_add(struct uci_session *s, const char *type, const char *name);
 void uci_session_set(struct uci_session *s, const char *section,
 		     const char *option, const char *value);
-void uci_session_del_list(struct uci_session *s, const char *section,
-			  const char *option, const char *value);
 void uci_session_add_list(struct uci_session *s, const char *section,
 			  const char *option, const char *value);
 bool uci_session_delete(struct uci_session *s, const char *section, const char *option);
 const char *uci_option_any(struct uci_context *ctx, struct uci_section *s, const char *name);
 void uci_session_close(struct uci_session *s);
 void roam_wireless_apply(void);
-void roam_network_reload(void);
+void roam_network_reload(const char *reason);
+void roam_network_reload_flush(void);
 
 extern const char *const roam_pair_issues[];
 void roam_pair_evaluate(void);
@@ -278,6 +278,7 @@ bool roam_policy_btm_paused(const uint8_t *addr);
 void roam_policy_deny(const uint8_t *addr, struct blob_attr *neighbors);
 uint32_t roam_policy_btm_rejects(const uint8_t *addr);
 uint8_t roam_policy_btm_token(struct roam_sta *sta);
+uint8_t roam_policy_mbo_reason(int signal);
 void roam_policy_btm_response(struct roam_sta *sta, struct roam_bss *bss, int token, int status,
 			      const char *target);
 
@@ -295,8 +296,23 @@ bool roam_sha256_data(const void *data, size_t size, char *hex, size_t len);
 
 #define roam_log(level, fmt, ...) do { \
 	if (config.log_level >= (level)) \
-		syslog(LOG_INFO, fmt, ##__VA_ARGS__); \
+		syslog((level) == ROAM_L_ERR ? LOG_ERR : \
+		       (level) == ROAM_L_DEBUG ? LOG_DEBUG : LOG_INFO, fmt, ##__VA_ARGS__); \
 } while (0)
+
+/* since the daemon started; shown by "ubus call roamd status" */
+struct roam_stats {
+	uint32_t commits;
+	uint32_t reloads;
+	uint32_t forks;
+	uint32_t rpc_calls;
+	uint32_t rpc_fails;
+	uint32_t contact_losses;
+	uint32_t idle_marks;
+	uint32_t stall_max;
+};
+
+extern struct roam_stats roam_stats;
 
 #define ROAMD_RCPI_IMPLAUSIBLE	200
 

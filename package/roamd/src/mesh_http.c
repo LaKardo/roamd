@@ -240,21 +240,6 @@ out:
 	return ok;
 }
 
-static struct blob_attr *attr_child(struct blob_attr *table, const char *name, int type)
-{
-	struct blob_attr *cur;
-	int rem;
-
-	if (!table)
-		return NULL;
-
-	blobmsg_for_each_attr(cur, table, rem)
-		if (!strcmp(blobmsg_name(cur), name) && blobmsg_type(cur) == type)
-			return cur;
-
-	return NULL;
-}
-
 int mesh_http_dropbear_iface(const char *addr, const char *sid, char *sections, size_t len,
 			     int timeout_ms)
 {
@@ -271,12 +256,12 @@ int mesh_http_dropbear_iface(const char *addr, const char *sid, char *sections, 
 		return -1;
 	}
 
-	values = attr_child(data, "values", BLOBMSG_TYPE_TABLE);
+	values = mesh_attr_field(data, "values", BLOBMSG_TYPE_TABLE);
 
 	if (values)
 		blobmsg_for_each_attr(cur, values, rem) {
 			if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE ||
-			    !attr_child(cur, "Interface", BLOBMSG_TYPE_STRING) ||
+			    !mesh_attr_field(cur, "Interface", BLOBMSG_TYPE_STRING) ||
 			    !mesh_valid_id(blobmsg_name(cur)))
 				continue;
 
@@ -304,7 +289,7 @@ char *mesh_http_file_read(const char *addr, const char *sid, const char *path, i
 	snprintf(args, sizeof(args), "{\"path\":\"%s\"}", path);
 
 	if (!mesh_http_ubus(addr, sid, "file", "read", args, &doc, &data, timeout_ms)) {
-		text = attr_child(data, "data", BLOBMSG_TYPE_STRING);
+		text = mesh_attr_field(data, "data", BLOBMSG_TYPE_STRING);
 		if (text)
 			out = strdup(blobmsg_get_string(text));
 	}

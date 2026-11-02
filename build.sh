@@ -59,6 +59,17 @@ known_arch() {
 
 SDK_MIRRORS="${SDK_MIRRORS:-https://mirror-03.infra.openwrt.org https://downloads.openwrt.org https://archive.openwrt.org https://mirrors.tuna.tsinghua.edu.cn/openwrt}"
 SDK_CACHE="${SDK_CACHE:-$BUILD/sdk-dl}"
+START=$(date +%s)
+
+# every line starts with the time since start, so a silent stage is visible as such
+log() {
+	t=$(( $(date +%s) - START ))
+	printf '[%02d:%02d] %s\n' $((t / 60)) $((t % 60)) "$*"
+}
+
+mb() {
+	echo "$(( $1 / 1048576 ))"
+}
 
 # one mirror: give up when it stays below 1 MB/s for 30 s, the next one may be faster
 download() {
@@ -67,6 +78,69 @@ download() {
 	else
 		wget -c -q --tries=2 --timeout=30 -O "$2" "$1"
 	fi
+}
+
+range() {
+	curl -fsSL --retry 3 --connect-timeout 15 -r "$3-$4" -o "$2" "$1"
+}
+
+remote_size() {
+	curl -fsIL --connect-timeout 15 "$1" |
+		tr -d '\r' | awk 'tolower($1) == "content-length:" { s = $2 } END { print s }'
+}
+
+# a mirror gives each connection a few hundred KB/s, so the SDK comes in SDK_SPLIT parts at once;
+# wget fails on a Range header that does not start at 0, so this needs curl
+download_split() {
+	command -v curl >/dev/null 2>&1 || return 1
+	n=${SDK_SPLIT:-8}
+	size=$(remote_size "$1")
+	case "$size" in ''|*[!0-9]*|0) return 1 ;; esac
+
+	part=$(( (size + n - 1) / n ))
+	pids=""
+	i=0
+	while [ "$i" -lt "$n" ]; do
+		from=$((i * part))
+		to=$((from + part - 1))
+		[ "$to" -ge "$size" ] && to=$((size - 1))
+		range "$1" "$2.part$i" "$from" "$to" &
+		pids="$pids $!"
+		i=$((i + 1))
+	done
+
+	ok=1
+	last=0
+	t0=$(date +%s)
+	while :; do
+		alive=0
+		for pid in $pids; do
+			kill -0 "$pid" 2>/dev/null && alive=1
+		done
+		[ "$alive" = 1 ] || break
+		sleep 1
+		now=$(date +%s)
+		[ $((now - last)) -ge 10 ] || continue
+		last=$now
+		got=0
+		for f in "$2".part*; do
+			[ -f "$f" ] && got=$((got + $(wc -c < "$f")))
+		done
+		log "  скачано $(mb "$got") из $(mb "$size") МБ, $(( got / 1024 / (now - t0 + 1) )) КБ/с"
+	done
+	for pid in $pids; do
+		wait "$pid" || ok=0
+	done
+
+	i=0
+	: > "$2"
+	while [ "$i" -lt "$n" ]; do
+		[ "$ok" = 1 ] && cat "$2.part$i" >> "$2"
+		rm -f "$2.part$i"
+		i=$((i + 1))
+	done
+
+	[ "$ok" = 1 ] && [ "$(wc -c < "$2")" -eq "$size" ]
 }
 
 fetch_text() {
@@ -101,32 +175,35 @@ fetch_sdk() {
 	file="$SDK_CACHE/$name"
 
 	if [ -f "$file" ] && echo "$sha  $file" | sha256sum -c - >/dev/null 2>&1; then
-		echo "  SDK из кеша: $name"
+		log "SDK из кеша: $name"
 	else
 		ok=0
 		first=""
 		for m in $SDK_MIRRORS; do
 			first=${first:-$m}
-			echo "  скачивание $name ($m)"
-			if download "$m/$path/$name" "$file" fast; then
+			log "Скачивание SDK $name ($m, ${SDK_SPLIT:-8} соединений)"
+			if download_split "$m/$path/$name" "$file" ||
+			   { rm -f "$file"; log "  по частям нельзя (нет curl или размера), обычная загрузка"; download "$m/$path/$name" "$file" fast; }; then
 				echo "$sha  $file" | sha256sum -c - >/dev/null 2>&1 && { ok=1; break; }
 				rm -f "$file"
 			fi
-			echo "  $m: не удалось или медленно, следующее зеркало" >&2
+			log "  $m: не удалось или медленно, следующее зеркало" >&2
 		done
 		if [ "$ok" != 1 ]; then
-			echo "  все зеркала медленные, докачка с $first без ограничения скорости"
+			log "  все зеркала медленные, докачка с $first без ограничения скорости"
 			download "$first/$path/$name" "$file" &&
 				echo "$sha  $file" | sha256sum -c - >/dev/null 2>&1 && ok=1
 		fi
 		if [ "$ok" != 1 ]; then
 			rm -f "$file"
-			echo "  SDK не скачан или не совпала контрольная сумма" >&2
+			log "  SDK не скачан или не совпала контрольная сумма" >&2
 			return 1
 		fi
+		log "SDK скачан, контрольная сумма совпала"
 		find "$SDK_CACHE" -name 'openwrt-sdk-*' ! -name "$name" -delete 2>/dev/null
 	fi
 
+	log "Распаковка SDK"
 	mkdir -p "$dir"
 	case "$name" in
 	*.zst) tar --zstd -xf "$file" -C "$dir" --strip-components=1 ;;
@@ -156,14 +233,17 @@ prepare_feeds() {
 	fi
 
 	if [ ! -d "$dir/package/feeds/luci/luci-base" ] || [ ! -d "$dir/package/feeds/base/uclient" ]; then
+		log "Feeds base и luci: git clone/update (без вывода, обычно несколько минут)"
 		( cd "$dir" && ./scripts/feeds update base luci >/dev/null 2>&1 )
 		( cd "$dir" && ./scripts/feeds install -a -p luci >/dev/null 2>&1 )
 		( cd "$dir" && ./scripts/feeds install -p base libubox libubus libuci ucode uclient ustream-ssl >/dev/null 2>&1 )
+	else
+		log "Feeds base и luci уже на месте"
 	fi
 
 	for name in base luci; do
 		if [ ! -d "$dir/feeds/$name" ] || [ ! -f "$dir/feeds/$name.index" ]; then
-			echo "  feed $name не подготовлен" >&2
+			log "  feed $name не подготовлен" >&2
 			return 1
 		fi
 	done
@@ -190,7 +270,14 @@ build_arch() {
 	ln -sfn "$ROOT/package/luci-app-roamd" "$dir/package/luci-app-roamd"
 
 	rm -rf "$dir/tmp"
+	log "Настройка SDK (make defconfig)"
 	( cd "$dir" && make defconfig >/dev/null 2>&1 ) || return 1
+
+	# the SDK selects every package by default, which builds openssl and wolfssl for nothing:
+	# drop that and every module it marked, keep only ours and the Russian translation
+	sed -i -E -e 's/^(CONFIG_ALL(_NONSHARED|_KMODS)?)=y$/# \1 is not set/' \
+		-e '/^CONFIG_PACKAGE_[^=]*=m$/d' -e '/^# CONFIG_LUCI_LANG_ru is not set$/d' "$dir/.config"
+	echo "CONFIG_LUCI_LANG_ru=y" >> "$dir/.config"
 
 	for pkg in $PACKAGES; do
 		grep -q "^CONFIG_PACKAGE_$pkg=m" "$dir/.config" ||
@@ -211,10 +298,26 @@ build_arch() {
 	find "$dir/bin/packages" \( -name 'roamd[-_]*' -o -name 'luci-app-roamd[-_]*' \
 		-o -name 'luci-i18n-roamd-ru[-_]*' \) -delete 2>/dev/null
 
-	( cd "$dir" && make package/roamd/compile package/luci-app-roamd/compile -j"$JOBS" >"$dir/build.log" 2>&1 ) || {
-		echo "  сборка не удалась, журнал: $dir/build.log" >&2
+	log "Сборка: зависимости (libubox, ubus, uci, uclient…), затем roamd и luci-app-roamd"
+	( cd "$dir" && make package/roamd/compile package/luci-app-roamd/compile -j"$JOBS" >"$dir/build.log" 2>&1 ) &
+	mpid=$!
+	shown=""
+	while kill -0 "$mpid" 2>/dev/null; do
+		sleep 2
+		# "make[2] -C feeds/base/package/libs/libubox compile" -> libubox
+		cur=$(sed -n 's#.* -C \([^ ]*\) \(compile\|host/compile\).*#\1 \2#p' "$dir/build.log" 2>/dev/null |
+			tail -1 | sed 's#^.*/\([^/ ]*\) #\1 #; s# compile$##; s# host/compile$# (для хоста)#')
+		[ -n "$cur" ] && [ "$cur" != "$shown" ] && { log "  собирается $cur"; shown=$cur; }
+		# the SDK fetches package sources itself and says nothing while it does
+		dl=$(ls "$dir/dl"/*.dl 2>/dev/null | head -1)
+		[ -n "$dl" ] && [ "$dl" != "${dlshown-}" ] && { log "  скачивание исходников $(basename "$dl" .dl)"; dlshown=$dl; }
+	done
+	wait "$mpid" || {
+		log "  сборка не удалась, журнал: $dir/build.log" >&2
+		tail -n 20 "$dir/build.log" >&2
 		return 1
 	}
+	log "Сборка завершена"
 
 	out="$DIST/${RELEASE%.*}/$real"
 	mkdir -p "$out"
@@ -268,7 +371,7 @@ done
 
 mkdir -p "$BUILD" "$DIST"
 
-ok=""
+built=""
 failed=""
 
 for entry in $TARGETS; do
@@ -285,17 +388,17 @@ for entry in $TARGETS; do
 		[ "$wanted" = 1 ] || continue
 	fi
 
-	echo "==> $arch  ($target/$subtarget)"
+	log "==> $arch  ($target/$subtarget, SDK $RELEASE)"
 
 	if build_arch "$arch" "$target" "$subtarget"; then
-		ok="$ok $arch"
+		built="$built $arch"
 	else
 		failed="$failed $arch"
 	fi
 done
 
 echo
-echo "Собрано:${ok:- —}"
-[ -n "$failed" ] && echo "Не собрано:$failed" >&2
+log "Собрано:${built:- —}"
+[ -n "$failed" ] && log "Не собрано:$failed" >&2
 
 [ -z "$failed" ]

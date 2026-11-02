@@ -576,8 +576,8 @@ return view.extend({
 		o.default = '1';
 
 		o = s.taboption('general', form.Flag, 'ft_over_ds', _('802.11r over the distribution system'),
-			_('Perform the fast transition over the wired side instead of over the air.'));
-		o.default = '1';
+			_('Perform the fast transition over the wired side instead of over the air. Many phones handle it poorly; leave it off unless needed.'));
+		o.default = '0';
 		o.depends('fast_transition', '1');
 
 		o = s.taboption('general', form.Value, 'mobility_domain', _('Mobility domain'),
@@ -597,6 +597,12 @@ return view.extend({
 		o = s.taboption('general', form.Flag, 'apply_wireless', _('Configure wireless automatically'),
 			_('Write the 802.11k/v/r options into the wireless configuration. Turn this off to manage them by hand.'));
 		o.default = '1';
+
+		o = s.taboption('general', form.Value, 'max_inactivity', _('Drop silent clients after'),
+			_('Seconds. An access point checks a client that has been silent this long and disconnects it if it does not answer, so a device that left Wi-Fi drops off the list sooner. Empty keeps the setting of each access point (300 s by default); 90 is recommended. Applying a new value restarts Wi-Fi once. Needs “Configure wireless automatically”.'));
+		o.datatype = 'range(30,3600)';
+		o.placeholder = '300';
+		o.depends('apply_wireless', '1');
 
 		o = s.taboption('policy', form.SectionValue, '_policy', form.NamedSection, 'policy', 'policy',
 			null, _('The defaults suit most homes. Change them only if the behaviour does not suit you.'));

@@ -5,3 +5,5 @@ service_docs/
 package/luci-app-roamd/test/
 tests/
 rebuild.sh
+*.tar.gz
+backup-*

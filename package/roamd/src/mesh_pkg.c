@@ -25,6 +25,7 @@ const char *const mesh_pkg_names[MESH_PKG_COUNT] = {
 #define SYNC_WAIT_MAX	300000
 #define PKG_INDEX_MAX	1048576
 #define PKG_CACHE_TTL	300000
+#define PKG_VIEW_HOLD	600000
 #define PKG_REDIRECT_MAX	5
 #define PKG_PREFIX_HTTPS	1
 
@@ -536,6 +537,20 @@ bool mesh_pkg_stale(const char *branch, const char *arch, const char *name)
 		return true;
 
 	return !c->busy && (!c->taken || roam_now - c->taken > PKG_CACHE_TTL);
+}
+
+static uint64_t pkg_viewed_at;
+
+void mesh_pkg_viewed(void)
+{
+	pkg_viewed_at = roam_now ? roam_now : 1;
+}
+
+/* the index is fetched for auto update or while someone looks at the web interface */
+bool mesh_pkg_wanted(void)
+{
+	return mesh.auto_update ||
+	       (pkg_viewed_at && roam_now - pkg_viewed_at < PKG_VIEW_HOLD);
 }
 
 static bool pkg_digest_ok(const char *path, const struct mesh_pkg_meta *meta)

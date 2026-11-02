@@ -11,7 +11,6 @@
 #include "mesh.h"
 
 #define SELFCHECK	"/var/run/roamd/selfcheck.json"
-#define PKG_DIR		"/var/run/roamd/pkg"
 #define OPKG_STATUS	"/usr/lib/opkg/status"
 #define APK_STATUS	"/lib/apk/db/installed"
 #define RELEASE_FILE	"/etc/openwrt_release"
@@ -486,14 +485,11 @@ int mesh_node_update_task(const char *addr, const char *task)
 	return 0;
 }
 
-int mesh_autoupdate_task(const char *phase, const char *task)
+int mesh_autoupdate_task(const char *task)
 {
 	char branch[MESH_WORD_MAX], arch[MESH_ARCH_MAX], have[MESH_WORD_MAX * 3];
 	bool updated = false;
 	size_t i;
-
-	if (phase && !strcmp(phase, "nodes"))
-		return mesh_update_nodes(task, true);
 
 	mesh_task_open(task);
 	mesh_task_report(task, "check", "progress", "checking the repository");

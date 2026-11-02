@@ -6,7 +6,8 @@
 #include "mesh.h"
 
 #define BTM_VALIDITY_PERIOD	100
-#define BTM_MBO_REASON		5
+#define BTM_MBO_LOW_RSSI	5
+#define BTM_MBO_UNSPECIFIED	0
 #define BTM_CELL_PREF		0
 #define KICK_REASON		5
 #define STEER_RETRY_INTERVAL	5000
@@ -297,6 +298,13 @@ static void policy_beacon_request(struct roam_sta *sta, struct roam_bss *from, s
 	roam_bss_invoke(from, "rrm_beacon_req", &b);
 }
 
+/* Low RSSI is the reason only when the client is weak: one that hears its AP well may ignore it. */
+uint8_t roam_policy_mbo_reason(int signal)
+{
+	return signal != ROAMD_NO_SIGNAL && signal < config.steer_rssi ?
+	       BTM_MBO_LOW_RSSI : BTM_MBO_UNSPECIFIED;
+}
+
 static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_bss *to)
 {
 	const char *nr = bss_nr_string(to);
@@ -311,7 +319,7 @@ static void policy_btm(struct roam_sta *sta, struct roam_bss *from, struct roam_
 
 	blobmsg_add_u8(&b, "abridged", 1);
 	blobmsg_add_u32(&b, "validity_period", BTM_VALIDITY_PERIOD);
-	blobmsg_add_u32(&b, "mbo_reason", BTM_MBO_REASON);
+	blobmsg_add_u32(&b, "mbo_reason", roam_policy_mbo_reason(sta->band[from->band].signal));
 	blobmsg_add_u32(&b, "cell_pref", BTM_CELL_PREF);
 
 	list = blobmsg_open_array(&b, "neighbors");

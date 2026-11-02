@@ -365,12 +365,12 @@ var EVENT_TYPE = {
 	kick: _('forced disconnect'),
 	'deny-node': _('device not allowed'),
 	'deny-band': _('band not allowed'),
-	'cardinal-on': _('held on the preferred band'),
-	'cardinal-off': _('released from the preferred band')
+	unknown: _('unknown')
 };
 
 var CLIENT_STATE = {
 	online: { color: '#2e9e2e', label: _('online') },
+	idle: { color: '#8bc34a', label: _('inactive') },
 	unknown: { color: '#e0a800', label: _('node not responding') },
 	offline: { color: '#bbb', label: _('offline') }
 };
@@ -383,13 +383,50 @@ function clientSeen(c) {
 	return c.state !== 'offline';
 }
 
+function seenAgo(ts) {
+	var s = Math.floor(Date.now() / 1000) - (ts || 0);
+
+	if (!ts || s < 0)
+		return '';
+	if (s < 3600)
+		return _('seen %d min ago').format(Math.max(1, Math.round(s / 60)));
+	if (s < 86400)
+		return _('seen %d h ago').format(Math.round(s / 3600));
+
+	return _('seen %d d ago').format(Math.round(s / 86400));
+}
+
+function clientStatus(c) {
+	var state = clientState(c);
+
+	if (c.state === 'online')
+		return '';
+	if (c.state === 'idle')
+		return common.note(_('inactive %d s').format(Math.round((c.inactive || 0) / 1000)), state.color);
+	if (c.state === 'offline' && seenAgo(c.last_seen))
+		return common.note(seenAgo(c.last_seen), state.color);
+
+	return common.note(state.label, state.color);
+}
+
 var CONS_ICON = { ok: '', degraded: '⚠', broken: '⛔' };
 var ISSUE_TEXT = {
 	ssid: _('SSID differs'),
 	encryption: _('encryption differs'),
 	mobility_domain: _('mobility domain differs'),
-	ieee80211r: _('802.11r differs')
+	ieee80211r: _('802.11r differs'),
+	networks: _('Wi-Fi networks differ from the controller'),
+	backhaul: _('backhaul network differs from the controller')
 };
+var SEG_ISSUE_TEXT = {
+	cable_tagged: _('the switch of the node tags the whole cable, a segment only goes over the air')
+};
+
+function issuesText(m) {
+	var list = Array.isArray(m.issues) ? m.issues : (m.issues ? [ m.issues ] : []);
+
+	return list.map(function(i) { return ISSUE_TEXT[i] || i; }).join(', ');
+}
 
 function consistencyCell(online, m) {
 	var state = online ? E('span', {}, _('online')) : E('span', { 'style': 'color:#888' }, _('offline'));
@@ -397,14 +434,15 @@ function consistencyCell(online, m) {
 	if (!online || !m.consistency || m.consistency === 'ok')
 		return E('div', {}, state);
 
-	var issues = (m.issues || []).map(function(i) { return ISSUE_TEXT[i] || i; }).join(', ');
+	var issues = issuesText(m);
 	var color = m.consistency === 'broken' ? '#c00' : '#c60';
 	var label = m.consistency === 'broken' ? _('roaming broken') : _('roaming degraded');
 
 	return E('div', {}, [
 		state, E('br'),
-		E('small', { 'style': 'color:%s'.format(color), 'title': issues },
-			'%s %s'.format(CONS_ICON[m.consistency], label))
+		E('small', { 'style': 'color:%s'.format(color) },
+			issues ? '%s %s: %s'.format(CONS_ICON[m.consistency], label, issues)
+			       : '%s %s'.format(CONS_ICON[m.consistency], label))
 	]);
 }
 
@@ -1463,9 +1501,7 @@ function renderLog() {
 		E('option', { 'value': 'disconnect' }, _('disconnected')),
 		E('option', { 'value': 'kick' }, _('forced disconnect')),
 		E('option', { 'value': 'deny-node' }, _('device not allowed')),
-		E('option', { 'value': 'deny-band' }, _('band not allowed')),
-		E('option', { 'value': 'cardinal-on' }, _('held on the preferred band')),
-		E('option', { 'value': 'cardinal-off' }, _('released from the preferred band'))
+		E('option', { 'value': 'deny-band' }, _('band not allowed'))
 	]);
 
 	var bar = E('div', { 'style': 'display:flex;gap:.5em;align-items:center;margin-bottom:.5em;flex-wrap:wrap' }, [
@@ -1660,6 +1696,11 @@ function clientDialog(c, hints, ov, nodeName, allNodes, refresh) {
 		infoRow(_('MAC address'), c.mac)
 	];
 
+	if (c.state === 'idle')
+		info.push(infoRow(_('Status'), _('inactive %d s').format(Math.round((c.inactive || 0) / 1000))));
+	else if (!clientSeen(c) && seenAgo(c.last_seen))
+		info.push(infoRow(_('Last seen'), seenAgo(c.last_seen)));
+
 	if (ip4)
 		info.push(infoRow(_('IP address'), ip4));
 	if (c.signal_24 || c.signal_5)
@@ -1765,10 +1806,10 @@ function nodeDialog(m, state, refresh) {
 		info.splice(2, 0, infoRow(_('Uplink signal'), '%d %s'.format(m.uplink_signal, _('dBm'))));
 
 	if (m.consistency && m.consistency !== 'ok')
-		info.push(infoRow(_('Profile check'), m.issues || m.consistency));
+		info.push(infoRow(_('Profile check'), issuesText(m) || m.consistency));
 
 	if (m.seg_issue)
-		info.push(infoRow(_('Segment'), m.seg_issue));
+		info.push(infoRow(_('Segment'), SEG_ISSUE_TEXT[m.seg_issue] || m.seg_issue));
 
 	var txInputs = {};
 	var txRows = txpowerRows(m.radios, { txpower_24: m.txpower_24, txpower_5: m.txpower_5 }, txInputs);
@@ -1888,8 +1929,7 @@ function connCell(c, ov) {
 	var mac = c.mac.toLowerCase();
 	var lock = (ov[mac] && ov[mac].band) || 'both';
 
-	var state = clientState(c);
-	var status = c.state === 'online' ? '' : common.note(state.label, state.color);
+	var status = clientStatus(c);
 
 	if (c.wired)
 		return E('div', {}, [ E('span', {}, _('Cable')), status ]);
@@ -2007,6 +2047,8 @@ function renderClients(state) {
 			var service = serviceMacs(members);
 			var up = [];
 			var down = [];
+
+			clients.sort(function(a, b) { return (b.last_seen || 0) - (a.last_seen || 0); });
 
 			clients.forEach(function(c) {
 				var mac = c.mac.toLowerCase();

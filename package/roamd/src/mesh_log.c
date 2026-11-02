@@ -40,15 +40,14 @@ static const char *const type_name[] = {
 	[MESH_EV_KICK] = "kick",
 	[MESH_EV_DENY_NODE] = "deny-node",
 	[MESH_EV_DENY_BAND] = "deny-band",
-	[MESH_EV_CARDINAL_ON] = "cardinal-on",
-	[MESH_EV_CARDINAL_OFF] = "cardinal-off",
+	[MESH_EV_UNKNOWN] = "unknown",
 };
 
 const char *mesh_event_type_name(enum mesh_event_type t)
 {
 	if (t < ARRAY_SIZE(type_name) && type_name[t])
 		return type_name[t];
-	return "";
+	return type_name[MESH_EV_UNKNOWN];
 }
 
 static const char *band_str(uint8_t band)
@@ -151,12 +150,24 @@ static struct mesh_event *ring_insert(const struct mesh_event *ev)
 
 static void event_line(char *buf, size_t size, const struct mesh_event *ev)
 {
-	snprintf(buf, size,
-		"{\"seq\":%u,\"ts\":%u,\"mac\":\"%s\",\"from_node\":\"%s\","
-		"\"to_node\":\"%s\",\"from_band\":%u,\"to_band\":%u,\"type\":%u,"
-		"\"origin\":\"%s\",\"origin_seq\":%u}\n",
-		ev->seq, ev->ts, ev->mac, ev->from_node, ev->to_node,
-		ev->from_band, ev->to_band, ev->type, ev->origin, ev->origin_seq);
+	static struct blob_buf b;
+	char *json;
+
+	blob_buf_init(&b, 0);
+	blobmsg_add_u32(&b, "seq", ev->seq);
+	blobmsg_add_u32(&b, "ts", ev->ts);
+	blobmsg_add_string(&b, "mac", ev->mac);
+	blobmsg_add_string(&b, "from_node", ev->from_node);
+	blobmsg_add_string(&b, "to_node", ev->to_node);
+	blobmsg_add_u32(&b, "from_band", ev->from_band);
+	blobmsg_add_u32(&b, "to_band", ev->to_band);
+	blobmsg_add_u32(&b, "type", ev->type);
+	blobmsg_add_string(&b, "origin", ev->origin);
+	blobmsg_add_u32(&b, "origin_seq", ev->origin_seq);
+
+	json = blobmsg_format_json(b.head, true);
+	snprintf(buf, size, "%s\n", json ? json : "{}");
+	free(json);
 }
 
 void mesh_log_flush(void)
@@ -264,6 +275,8 @@ void mesh_log_load(void)
 		ev.from_band = tb[LF_FB] ? blobmsg_get_u32(tb[LF_FB]) : MESH_BAND_NA;
 		ev.to_band = tb[LF_TB] ? blobmsg_get_u32(tb[LF_TB]) : MESH_BAND_NA;
 		ev.type = tb[LF_TYPE] ? blobmsg_get_u32(tb[LF_TYPE]) : 0;
+		if (ev.type >= __MESH_EV_MAX)
+			ev.type = MESH_EV_UNKNOWN;
 		if (tb[LF_ORIGIN])
 			strncpy(ev.origin, blobmsg_get_string(tb[LF_ORIGIN]), sizeof(ev.origin) - 1);
 		ev.origin_seq = tb[LF_ORIGIN_SEQ] ? blobmsg_get_u32(tb[LF_ORIGIN_SEQ]) : 0;
@@ -369,7 +382,7 @@ static void event_merge(const char *id, const char *node, struct blob_attr **tb)
 	ev.from_band = band_parse(tb[EVF_FROM_BAND]);
 	ev.to_band = band_parse(tb[EVF_TO_BAND]);
 
-	ev.type = MESH_EV_ROAM;
+	ev.type = MESH_EV_UNKNOWN;
 	for (i = 0; tb[EVF_TYPE] && i < ARRAY_SIZE(type_name); i++)
 		if (type_name[i] && !strcmp(type_name[i], blobmsg_get_string(tb[EVF_TYPE])))
 			ev.type = i;

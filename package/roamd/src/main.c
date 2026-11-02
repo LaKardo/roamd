@@ -14,6 +14,22 @@ static struct ubus_auto_conn conn;
 static struct uloop_timeout setup_timer;
 static bool ubus_object_registered;
 
+#define STALL_TICK	1000
+
+static struct uloop_timeout stall_timer;
+static uint64_t stall_due;
+
+static void stall_cb(struct uloop_timeout *t)
+{
+	roam_time_update();
+
+	if (stall_due && roam_now > stall_due && roam_now - stall_due > roam_stats.stall_max)
+		roam_stats.stall_max = (uint32_t)(roam_now - stall_due);
+
+	stall_due = roam_now + STALL_TICK;
+	uloop_timeout_set(t, STALL_TICK);
+}
+
 static void setup_run(struct uloop_timeout *t)
 {
 	if (!ubus_object_registered) {
@@ -137,8 +153,7 @@ int main(int argc, char **argv)
 		else if (!strcmp(argv[1], "node-update"))
 			rc = argc == 4 ? mesh_node_update_task(argv[2], argv[3]) : 1;
 		else
-			rc = mesh_autoupdate_task(argc == 4 ? argv[2] : NULL,
-						  argc == 4 ? argv[3] : argv[2]);
+			rc = argc == 3 ? mesh_autoupdate_task(argv[2]) : 1;
 
 		uloop_done();
 
@@ -159,9 +174,14 @@ int main(int argc, char **argv)
 	conn.cb = ubus_connect_handler;
 	ubus_auto_connect(&conn);
 
+	stall_timer.cb = stall_cb;
+	uloop_timeout_set(&stall_timer, STALL_TICK);
+
 	uloop_run();
 
+	uloop_timeout_cancel(&stall_timer);
 	uloop_timeout_cancel(&setup_timer);
+	roam_network_reload_flush();
 	mesh_log_flush();
 	mesh_clients_save();
 	roam_bss_free_all();

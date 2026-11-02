@@ -168,6 +168,17 @@ static int roamd_status(struct ubus_context *ctx, struct ubus_object *obj,
 	}
 	blobmsg_close_table(&b, ifaces);
 
+	ifaces = blobmsg_open_table(&b, "stats");
+	blobmsg_add_u32(&b, "uci_commits", roam_stats.commits);
+	blobmsg_add_u32(&b, "network_reloads", roam_stats.reloads);
+	blobmsg_add_u32(&b, "forks", roam_stats.forks);
+	blobmsg_add_u32(&b, "rpc_calls", roam_stats.rpc_calls);
+	blobmsg_add_u32(&b, "rpc_fails", roam_stats.rpc_fails);
+	blobmsg_add_u32(&b, "contact_losses", roam_stats.contact_losses);
+	blobmsg_add_u32(&b, "idle_marks", roam_stats.idle_marks);
+	blobmsg_add_u32(&b, "loop_stall_max_ms", roam_stats.stall_max);
+	blobmsg_close_table(&b, ifaces);
+
 	ubus_send_reply(ctx, req, b.head);
 
 	return 0;
@@ -206,10 +217,13 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 			struct blob_attr *msg)
 {
 	void *members;
+	char parents[MESH_BH_PARENTS_LEN];
 
 	blob_buf_init(&b, 0);
 	blobmsg_add_string(&b, "role", mesh_role_name(mesh.role));
 	blobmsg_add_u8(&b, "enabled", mesh.enabled);
+	roam_time_update();
+	mesh_pkg_viewed();
 
 	if (mesh.role == MESH_NODE) {
 		void *ctrl, *counts;
@@ -286,6 +300,7 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 						(uint32_t)*mesh_radio_slot(mesh.txpower, mesh.channel, mesh.width, k));
 		}
 		mesh_ctrl_acquire_blob(&b);
+		mesh_parents_build(parents, sizeof(parents));
 
 		members = blobmsg_open_array(&b, "members");
 		list_for_each_entry(m, &mesh_members, list) {
@@ -308,7 +323,7 @@ static int roamd_mesh_status(struct ubus_context *ctx, struct ubus_object *obj,
 							(uint32_t)*mesh_radio_slot(m->txpower, m->channel, m->width, k));
 			}
 
-			if (m->bh_nodes[0] && !mesh_parent_reachable(m->id, m->bh_nodes))
+			if (m->bh_nodes[0] && !mesh_parent_reachable(m->id, m->bh_nodes, parents))
 				blobmsg_add_u8(&b, "bh_nodes_void", 1);
 			mesh_member_live(m->id, &b);
 			blobmsg_close_table(&b, e);
@@ -370,16 +385,25 @@ static const struct blobmsg_policy mesh_arg_policy[__MESH_ARG_MAX] = {
 	[MESH_ARG_W5] = { .name = "width_5", .type = BLOBMSG_TYPE_STRING },
 };
 
+/* controller-only methods share the argument table */
+static bool ctrl_args(struct blob_attr **tb, struct blob_attr *msg)
+{
+	if (mesh.role != MESH_CONTROLLER)
+		return false;
+
+	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
+
+	return true;
+}
+
 static int roamd_mesh_job(struct ubus_context *ctx, struct ubus_object *obj,
 			  struct ubus_request_data *req, const char *method,
 			  struct blob_attr *msg)
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 
 	blob_buf_init(&b, 0);
 	mesh_ctrl_job(strcmp(method, "mesh_discover") ? MESH_JOB_SELF_CHECK : MESH_JOB_DISCOVER,
@@ -396,10 +420,8 @@ static int roamd_mesh_acquire(struct ubus_context *ctx, struct ubus_object *obj,
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_ADDR] || !mesh_valid_addr(blobmsg_get_string(tb[MESH_ARG_ADDR])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
@@ -435,10 +457,8 @@ static int roamd_mesh_member_remove(struct ubus_context *ctx, struct ubus_object
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_ID] || !mesh_valid_id(blobmsg_get_string(tb[MESH_ARG_ID])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
@@ -573,10 +593,8 @@ static int roamd_mesh_member_update(struct ubus_context *ctx, struct ubus_object
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_ID] || !mesh_valid_id(blobmsg_get_string(tb[MESH_ARG_ID])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
@@ -595,10 +613,8 @@ static int roamd_mesh_update(struct ubus_context *ctx, struct ubus_object *obj,
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_ID] || !mesh_valid_id(blobmsg_get_string(tb[MESH_ARG_ID])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
@@ -659,10 +675,8 @@ static int roamd_mesh_network_update(struct ubus_context *ctx, struct ubus_objec
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 
 	if (!tb[MESH_ARG_SSID] || !tb[MESH_ARG_ROAMING])
 		return UBUS_STATUS_INVALID_ARGUMENT;
@@ -773,10 +787,8 @@ static int roamd_mesh_client_update(struct ubus_context *ctx, struct ubus_object
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])) ||
 	    (!tb[MESH_ARG_BAND] && !tb[MESH_ARG_ALIAS] && !tb[MESH_ARG_NODES]))
 		return UBUS_STATUS_INVALID_ARGUMENT;
@@ -796,10 +808,8 @@ static int roamd_mesh_client_forget(struct ubus_context *ctx, struct ubus_object
 {
 	struct blob_attr *tb[__MESH_ARG_MAX];
 
-	if (mesh.role != MESH_CONTROLLER)
+	if (!ctrl_args(tb, msg))
 		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(mesh_arg_policy, __MESH_ARG_MAX, tb, blob_data(msg), blob_len(msg));
 	if (!tb[MESH_ARG_MAC] || !mesh_valid_mac(blobmsg_get_string(tb[MESH_ARG_MAC])))
 		return UBUS_STATUS_INVALID_ARGUMENT;
 
@@ -861,39 +871,6 @@ static int roamd_mesh_log(struct ubus_context *ctx, struct ubus_object *obj,
 	return 0;
 }
 
-enum {
-	INGEST_ID,
-	INGEST_NODE,
-	INGEST_EVENTS,
-	__INGEST_MAX
-};
-
-static const struct blobmsg_policy ingest_policy[__INGEST_MAX] = {
-	[INGEST_ID] = { .name = "id", .type = BLOBMSG_TYPE_STRING },
-	[INGEST_NODE] = { .name = "node", .type = BLOBMSG_TYPE_STRING },
-	[INGEST_EVENTS] = { .name = "events", .type = BLOBMSG_TYPE_ARRAY },
-};
-
-static int roamd_mesh_log_ingest(struct ubus_context *ctx, struct ubus_object *obj,
-			struct ubus_request_data *req, const char *method,
-			struct blob_attr *msg)
-{
-	struct blob_attr *tb[__INGEST_MAX];
-
-	if (mesh.role != MESH_CONTROLLER)
-		return UBUS_STATUS_PERMISSION_DENIED;
-
-	blobmsg_parse(ingest_policy, __INGEST_MAX, tb, blob_data(msg), blob_len(msg));
-	if (!tb[INGEST_ID] || !tb[INGEST_NODE] || !tb[INGEST_EVENTS] ||
-	    !mesh_valid_id(blobmsg_get_string(tb[INGEST_ID])))
-		return UBUS_STATUS_INVALID_ARGUMENT;
-
-	mesh_log_ingest(blobmsg_get_string(tb[INGEST_ID]), blobmsg_get_string(tb[INGEST_NODE]),
-			tb[INGEST_EVENTS]);
-
-	return 0;
-}
-
 static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD_NOARG("status", roamd_status),
 	UBUS_METHOD_NOARG("config", roamd_config),
@@ -922,7 +899,6 @@ static const struct ubus_method roamd_methods[] = {
 	UBUS_METHOD_NOARG("mesh_neighbors", roamd_mesh_neighbors),
 	UBUS_METHOD("mesh_deny", roamd_mesh_deny, mesh_arg_policy),
 	UBUS_METHOD_NOARG("mesh_log", roamd_mesh_log),
-	UBUS_METHOD("mesh_log_ingest", roamd_mesh_log_ingest, ingest_policy),
 };
 
 static struct ubus_object_type roamd_type =

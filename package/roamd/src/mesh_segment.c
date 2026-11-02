@@ -12,7 +12,6 @@
 
 #define SEG_SECTION	"roamd_seg"
 #define SWITCH_LIST	"swconfig list 2>/dev/null"
-#define SWITCH_SHOW	"swconfig dev %s show 2>/dev/null"
 #define SWITCH_HELP	"swconfig dev %s help 2>&1"
 #define SEG_NAME_MAX	24
 #define SEG_LINK_MAX	(MESH_ALLOW_MAX + 2)
@@ -26,7 +25,7 @@ struct seg_link {
 
 static struct seg_link segs[MESH_NET_MAX];
 static unsigned int segs_n;
-static char seg_issue[96];
+static const char *seg_issue = "";
 static const char *seg_trunk = "";
 
 static void seg_bridge_name(char *out, size_t len, uint16_t vid)
@@ -159,6 +158,8 @@ static bool cmd_out(const char *cmd, char *buf, size_t len)
 	if (!f)
 		return false;
 
+	roam_stats.forks++;
+
 	got = fread(buf, 1, len - 1, f);
 	buf[got] = 0;
 	pclose(f);
@@ -166,52 +167,30 @@ static bool cmd_out(const char *cmd, char *buf, size_t len)
 	return got > 0;
 }
 
-struct switch_info {
-	char dev[MESH_WORD_MAX];
-	int cpu;
-	int port;
-	unsigned int links;
-};
-
-static bool switch_probe(struct switch_info *out)
+/* a swconfig switch with a CPU port; it is hardware, so asked once per process */
+static bool switch_probe(void)
 {
-	char list[512], cmd[64], show[8192];
-	char *line, *save = NULL;
-	int port = -1;
+	static int known = -1;
+	char list[512], cmd[64], help[8192], dev[MESH_WORD_MAX] = "";
+	const char *line;
 
-	memset(out, 0, sizeof(*out));
-	out->cpu = -1;
-	out->port = -1;
+	if (known >= 0)
+		return known;
+
+	known = 0;
 
 	if (!cmd_out(SWITCH_LIST, list, sizeof(list)) ||
-	    sscanf(list, "Found: %11s", out->dev) != 1 || !out->dev[0])
+	    sscanf(list, "Found: %11s", dev) != 1 || !dev[0])
 		return false;
 
-	snprintf(cmd, sizeof(cmd), SWITCH_HELP, out->dev);
-	if (!cmd_out(cmd, show, sizeof(show)))
+	snprintf(cmd, sizeof(cmd), SWITCH_HELP, dev);
+	if (!cmd_out(cmd, help, sizeof(help)))
 		return false;
 
-	line = strstr(show, "(cpu @ ");
-	if (!line)
-		return false;
+	line = strstr(help, "(cpu @ ");
+	known = line && atoi(line + strlen("(cpu @ ")) >= 0;
 
-	out->cpu = atoi(line + strlen("(cpu @ "));
-	save = NULL;
-
-	snprintf(cmd, sizeof(cmd), SWITCH_SHOW, out->dev);
-	if (!cmd_out(cmd, show, sizeof(show)))
-		return false;
-
-	for (line = strtok_r(show, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-		if (!strstr(line, "link:up") ||
-		    sscanf(line, " link: port:%d", &port) != 1 || port == out->cpu)
-			continue;
-
-		out->links++;
-		out->port = port;
-	}
-
-	return out->cpu >= 0;
+	return known;
 }
 
 static void base_name(const char *ifname, char *out, size_t len, bool *tagged)
@@ -299,9 +278,7 @@ static unsigned int child_links(char out[][IFNAMSIZ], unsigned int max)
 
 static bool cable_allowed(void)
 {
-	struct switch_info sw;
-
-	return mesh.role == MESH_CONTROLLER || !switch_probe(&sw);
+	return mesh.role == MESH_CONTROLLER || !switch_probe();
 }
 
 static unsigned int wired_ports(char out[][IFNAMSIZ], unsigned int max)
@@ -349,11 +326,13 @@ static void links_sweep(void)
 		return;
 
 	while ((de = readdir(d))) {
-		unsigned int vid = 0;
+		unsigned int vid = 0, idx;
 		bool known = false;
+		char tail;
 
+		/* only our own sg<vid>_<idx> links; sscanf does not check a trailing literal */
 		if (strncmp(de->d_name, MESH_SEG_PREFIX, strlen(MESH_SEG_PREFIX)) ||
-		    sscanf(de->d_name + strlen(MESH_SEG_PREFIX), "%u_", &vid) != 1)
+		    sscanf(de->d_name + strlen(MESH_SEG_PREFIX), "%u_%u%c", &vid, &idx, &tail) != 2)
 			continue;
 
 		for (i = 0; i < segs_n && !known; i++)
@@ -434,7 +413,7 @@ bool mesh_seg_node_apply(void)
 	bool air, cable, changed;
 	unsigned int i;
 
-	seg_issue[0] = 0;
+	seg_issue = "";
 	seg_trunk = "";
 
 	if (!segs_collect())
@@ -443,9 +422,9 @@ bool mesh_seg_node_apply(void)
 	air = mesh_bridge_sta_up();
 	cable = cable_allowed();
 
+	/* the switch of the node tags the whole cable, a segment only goes over the air */
 	if (!cable && !air)
-		snprintf(seg_issue, sizeof(seg_issue),
-			 "the switch of the node tags the whole cable, a segment only goes over the air");
+		seg_issue = "cable_tagged";
 
 	for (i = 0; i < segs_n; i++)
 		segs[i].usable = air || cable;
@@ -489,32 +468,6 @@ bool mesh_seg_node_apply(void)
 			uci_session_set(&u, iface, "proto", "none");
 			uci_session_set(&u, iface, "device", brname);
 		}
-	}
-
-	changed = u.dirty;
-	uci_session_close(&u);
-
-	return changed;
-}
-
-bool mesh_seg_node_drop(void)
-{
-	struct uci_session u;
-	struct uci_element *e, *tmp;
-	bool changed;
-
-	if (!uci_session_open(&u, "network"))
-		return false;
-
-	uci_foreach_element_safe(&u.pkg->sections, tmp, e) {
-		struct uci_section *s = uci_to_section(e);
-		uint16_t vid = seg_section_vid(s);
-
-		if (!vid)
-			continue;
-
-		uci_session_delete(&u, s->e.name, NULL);
-		links_reconcile(vid, NULL, 0);
 	}
 
 	changed = u.dirty;

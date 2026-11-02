@@ -493,10 +493,22 @@ static void nets_store(void)
 	uci_session_set(&u, "mesh", "networks_sum", nets_sum);
 	snprintf(mesh.networks_sum, sizeof(mesh.networks_sum), "%s", nets_sum);
 
+	/* rewrite only what differs, so an unchanged profile does not commit to flash */
 	uci_foreach_element_safe(&u.pkg->sections, tmp, e) {
 		struct uci_section *s = uci_to_section(e);
+		bool keep = false;
 
-		if (!strcmp(s->type, "wifinet"))
+		if (strcmp(s->type, "wifinet"))
+			continue;
+
+		for (i = 0; i < nets_n && !keep; i++) {
+			char name[32];
+
+			snprintf(name, sizeof(name), NET_SECTION "%.4s", nets[i].id);
+			keep = !strcmp(s->e.name, name);
+		}
+
+		if (!keep)
 			uci_session_delete(&u, s->e.name, NULL);
 	}
 
@@ -515,6 +527,8 @@ static void nets_store(void)
 
 			snprintf(value, sizeof(value), "%u", nets[i].vid);
 			uci_session_set(&u, name, "vid", value);
+		} else {
+			uci_session_delete(&u, name, "vid");
 		}
 	}
 
@@ -583,8 +597,13 @@ bool mesh_networks_apply(struct blob_attr *networks)
 	unsigned int nradios, i, r;
 	bool changed, net_changed = false;
 
-	if (!networks || !nets_parse(networks))
+	if (!networks)
 		return false;
+
+	if (!nets_parse(networks)) {
+		roam_log(ROAM_L_INFO, "mesh: profile carries no networks, Wi-Fi left as it is");
+		return false;
+	}
 
 	if (mesh_seg_node_apply())
 		net_changed = true;

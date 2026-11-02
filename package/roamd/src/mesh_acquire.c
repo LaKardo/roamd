@@ -11,7 +11,7 @@
 #include "roamd.h"
 #include "mesh.h"
 
-#define MEMBERS_DIR	"/etc/roamd/members"
+#define MEMBERS_CERTS	"/etc/roamd/members"
 #define TOKENS_DIR	"/etc/roamd/tokens"
 #define SSH_SHORT	20000
 #define SSH_LONG	300000
@@ -39,10 +39,17 @@ struct acquire_ctx {
 	char caddr[32];
 	char node_ip[32];
 	char need[128];
+	bool leased;
 };
 
 static int fail(struct acquire_ctx *c, const char *step, const char *text)
 {
+	/* a failed enrollment must not keep an address in the controller subnet */
+	if (c->leased) {
+		mesh_lease_drop(c->member_id);
+		c->leased = false;
+	}
+
 	mesh_task_report(c->task, step, "error", text);
 
 	return 1;
@@ -427,7 +434,6 @@ static int enroll_network(struct acquire_ctx *c)
 		 "uci set dhcp.@dnsmasq[0].noresolv='1'\n"
 		 "uci -q delete dhcp.@dnsmasq[0].server\n"
 		 "uci add_list dhcp.@dnsmasq[0].server='%s'\n"
-		 "uci -q delete firewall.roamd_mesh\n"
 		 "for sect in $(uci show firewall | "
 		 "sed -n 's/^firewall\\.\\(@forwarding\\[[0-9]*\\]\\)=forwarding$/\\1/p' | "
 		 "sed '1!G;h;$!d'); do uci delete firewall.$sect; done\n"
@@ -678,16 +684,14 @@ int mesh_acquire_run(const char *addr, const char *task, bool reset)
 		return fail(&c, "network", text);
 	}
 
-	if (enroll_network(&c)) {
-		mesh_lease_drop(c.member_id);
+	c.leased = true;
 
+	if (enroll_network(&c))
 		return fail(&c, "network", "cannot switch the node to the controller subnet");
-	}
 
 	sleep(20);
 
 	if (!mesh_node_wait_at(c.node_ip, c.mac, 180)) {
-		mesh_lease_drop(c.member_id);
 		snprintf(text, sizeof(text), "the node did not appear at %s in the controller subnet",
 			 c.node_ip);
 
@@ -753,7 +757,7 @@ int mesh_acquire_run(const char *addr, const char *task, bool reset)
 	}
 
 	mesh_task_report(task, "enroll", "progress", "securing the control channel");
-	mkdir(MEMBERS_DIR, 0755);
+	mkdir(MEMBERS_CERTS, 0755);
 	mkdir(TOKENS_DIR, 0700);
 
 	if (!mesh_random_hex(token, 12))
@@ -769,7 +773,7 @@ int mesh_acquire_run(const char *addr, const char *task, bool reset)
 	{
 		char path[192];
 
-		snprintf(path, sizeof(path), MEMBERS_DIR "/%s.crt", c.member_id);
+		snprintf(path, sizeof(path), MEMBERS_CERTS "/%s.crt", c.member_id);
 
 		if (!mesh_scp_from(c.addr, "/etc/roamd-node.crt", path))
 			return fail(&c, "enroll", "could not fetch the node certificate");

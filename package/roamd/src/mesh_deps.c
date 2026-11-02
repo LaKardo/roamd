@@ -11,8 +11,10 @@
 #include "mesh.h"
 
 #define DEPS_STATE	"/tmp/roamd/deps"
-#define DEPS_TRIES	3
 #define PKG_TIMEOUT	240000
+
+#define MESH_DEPS_FIRST		5000
+#define MESH_DEPS_RETRY		300000
 
 static const char *const wpad_full[] = {
 	"wpad", "wpad-openssl", "wpad-mbedtls", "wpad-wolfssl"
@@ -334,4 +336,51 @@ int mesh_release_run(const char *id, const char *task)
 	mesh_task_report(task, "done", "ok", id);
 
 	return 0;
+}
+
+static struct uloop_timeout deps_timer;
+static bool deps_ready;
+static void deps_done(struct mesh_task *task, int ret);
+static struct mesh_task deps_job = { .done = deps_done };
+
+static void deps_done(struct mesh_task *task, int ret)
+{
+	deps_ready = ret == 0;
+
+	if (!deps_ready)
+		uloop_timeout_set(&deps_timer, MESH_DEPS_RETRY);
+}
+
+static void deps_cb(struct uloop_timeout *t)
+{
+	char *argv[3] = { MESH_DEPS_SCRIPT, "deps-ensure", NULL };
+
+	if (deps_job.busy)
+		return;
+
+	if (!mesh_task_run(&deps_job, argv))
+		uloop_timeout_set(&deps_timer, MESH_DEPS_RETRY);
+}
+
+void mesh_deps_start(void)
+{
+	if (deps_timer.cb)
+		return;
+
+	deps_timer.cb = deps_cb;
+	uloop_timeout_set(&deps_timer, MESH_DEPS_FIRST);
+}
+
+void mesh_deps_blob(struct blob_buf *b)
+{
+	char *state = mesh_slurp(MESH_DEPS_STATE, 256);
+
+	blobmsg_add_u8(b, "deps_ready", deps_ready);
+
+	if (state) {
+		state[strcspn(state, "\r\n")] = '\0';
+		if (state[0])
+			blobmsg_add_string(b, "deps_state", state);
+		free(state);
+	}
 }

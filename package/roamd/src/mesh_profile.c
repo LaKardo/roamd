@@ -9,7 +9,6 @@
 #include "roamd.h"
 #include "mesh.h"
 
-#define MEMBERS_DIR	"/var/run/roamd/members"
 #define PARENT_ENTRY_MAX	(MESH_MAC_MAX + PARENT_CHAIN + 16)
 #define PARENT_MAX		MESH_BH_PARENT_MAX
 #define PARENT_CHAIN	160
@@ -21,7 +20,6 @@ struct profile_member {
 	const char *id;
 	const char *via;
 	bool wifi;
-	bool online;
 	int depth;
 	char chain[PARENT_CHAIN];
 	struct blob_attr *aps;
@@ -30,7 +28,7 @@ struct profile_member {
 
 const char *const mesh_global_opts[] = {
 	"mobility_domain", "band_steering", "prefer_band", "fast_transition",
-	"ft_over_ds", "neighbor_reports", "bss_transition", NULL
+	"ft_over_ds", "neighbor_reports", "bss_transition", "max_inactivity", NULL
 };
 
 const char *const mesh_policy_opts[] = {
@@ -58,71 +56,18 @@ static unsigned int opts_count(const char *const *opts)
 	return n;
 }
 
-static const char *root_str(struct blob_buf *doc, const char *name)
-{
-	struct blob_attr *cur;
-	int rem;
-
-	blob_for_each_attr(cur, doc->head, rem) {
-		if (strcmp(blobmsg_name(cur), name))
-			continue;
-
-		if (blobmsg_type(cur) == BLOBMSG_TYPE_STRING)
-			return blobmsg_get_string(cur);
-
-		if (blobmsg_type(cur) == BLOBMSG_TYPE_BOOL)
-			return blobmsg_get_bool(cur) ? "true" : "false";
-	}
-
-	return NULL;
-}
-
-static struct blob_attr *root_field(struct blob_buf *doc, const char *name, int type)
-{
-	struct blob_attr *cur;
-	int rem;
-
-	blob_for_each_attr(cur, doc->head, rem)
-		if (!strcmp(blobmsg_name(cur), name) && blobmsg_type(cur) == type)
-			return cur;
-
-	return NULL;
-}
-
-static const char *json_str(struct blob_attr *doc, const char *name)
-{
-	struct blob_attr *cur;
-	int rem;
-
-	if (!doc)
-		return NULL;
-
-	blobmsg_for_each_attr(cur, doc, rem) {
-		if (strcmp(blobmsg_name(cur), name))
-			continue;
-
-		if (blobmsg_type(cur) == BLOBMSG_TYPE_STRING)
-			return blobmsg_get_string(cur);
-
-		if (blobmsg_type(cur) == BLOBMSG_TYPE_BOOL)
-			return blobmsg_get_bool(cur) ? "true" : "false";
-	}
-
-	return NULL;
-}
-
 bool mesh_member_state(const char *id, const char *field, char *out, size_t len)
 {
-	char path[sizeof(MEMBERS_DIR) + MESH_ID_MAX + 8];
+	char path[sizeof(MESH_MEMBERS_RUN) + MESH_ID_MAX + 8];
 	struct blob_buf doc = { 0 };
 	const char *v;
 	bool ok = false;
 
-	snprintf(path, sizeof(path), MEMBERS_DIR "/%s.json", id);
+	snprintf(path, sizeof(path), MESH_MEMBERS_RUN "/%s.json", id);
 	blob_buf_init(&doc, 0);
 
 	if (blobmsg_add_json_from_file(&doc, path)) {
-		v = root_str(&doc, field);
+		v = mesh_root_str(&doc, field);
 		if (v) {
 			snprintf(out, len, "%s", v);
 			ok = true;
@@ -162,7 +107,7 @@ static int member_by_bssid(struct profile_member *m, unsigned int n, const char 
 			continue;
 
 		blobmsg_for_each_attr(ap, m[i].aps, rem) {
-			const char *cur = json_str(ap, "bssid");
+			const char *cur = mesh_attr_str(ap, "bssid");
 
 			if (cur && !strcasecmp(cur, bssid))
 				return (int)i;
@@ -283,15 +228,15 @@ static void parents_sorted(char *out, size_t len, char entries[][PARENT_ENTRY_MA
 	}
 }
 
-bool mesh_parent_reachable(const char *member_id, const char *nodes)
+bool mesh_parent_reachable(const char *member_id, const char *nodes, const char *parents)
 {
 	char list[MESH_BH_PARENTS_LEN], allow[MESH_BH_ALLOW_LEN];
 	char *tok, *save = NULL;
 
-	if (!nodes || !nodes[0] || !mesh.backhaul_parents[0])
+	if (!nodes || !nodes[0] || !parents || !parents[0])
 		return true;
 
-	snprintf(list, sizeof(list), "%s", mesh.backhaul_parents);
+	snprintf(list, sizeof(list), "%s", parents);
 
 	for (tok = strtok_r(list, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
 		char *depth = strchr(tok, '/');
@@ -337,7 +282,7 @@ static void parents_build(char *out, size_t len)
 	parents_own(out, len);
 
 	list_for_each_entry(m, &mesh_members, list) {
-		char path[sizeof(MEMBERS_DIR) + MESH_ID_MAX + 8];
+		char path[sizeof(MESH_MEMBERS_RUN) + MESH_ID_MAX + 8];
 		const char *online, *conn;
 		struct profile_member *p;
 
@@ -347,7 +292,7 @@ static void parents_build(char *out, size_t len)
 		p = &list[n];
 		memset(p, 0, sizeof(*p));
 
-		snprintf(path, sizeof(path), MEMBERS_DIR "/%s.json", m->id);
+		snprintf(path, sizeof(path), MESH_MEMBERS_RUN "/%s.json", m->id);
 		blob_buf_init(&p->doc, 0);
 
 		if (!blobmsg_add_json_from_file(&p->doc, path)) {
@@ -356,17 +301,16 @@ static void parents_build(char *out, size_t len)
 		}
 
 		p->id = m->id;
-		online = root_str(&p->doc, "online");
+		online = mesh_root_str(&p->doc, "online");
 		if (!online || strcmp(online, "true")) {
 			blob_buf_free(&p->doc);
 			continue;
 		}
 
-		p->online = true;
-		p->via = root_str(&p->doc, "via");
-		conn = root_str(&p->doc, "connection");
+		p->via = mesh_root_str(&p->doc, "via");
+		conn = mesh_root_str(&p->doc, "connection");
 		p->wifi = conn && !strcmp(conn, "wifi");
-		p->aps = root_field(&p->doc, "aps", BLOBMSG_TYPE_ARRAY);
+		p->aps = mesh_root_field(&p->doc, "aps", BLOBMSG_TYPE_ARRAY);
 		p->depth = DEPTH_UNSET;
 		n++;
 	}
@@ -379,9 +323,9 @@ static void parents_build(char *out, size_t len)
 			continue;
 
 		blobmsg_for_each_attr(ap, list[i].aps, rem) {
-			const char *ssid = json_str(ap, "ssid");
-			const char *bssid = json_str(ap, "bssid");
-			const char *band = json_str(ap, "band");
+			const char *ssid = mesh_attr_str(ap, "ssid");
+			const char *bssid = mesh_attr_str(ap, "bssid");
+			const char *band = mesh_attr_str(ap, "band");
 
 			if (!ssid || !bssid || !band || strcmp(ssid, mesh.backhaul_ssid))
 				continue;
@@ -416,6 +360,11 @@ static void parents_build(char *out, size_t len)
 	}
 }
 
+void mesh_parents_build(char *out, size_t len)
+{
+	parents_build(out, len);
+}
+
 static void opts_dump(struct blob_buf *b, const char *name,
 		      const char *const *opts, size_t n)
 {
@@ -424,8 +373,12 @@ static void opts_dump(struct blob_buf *b, const char *name,
 	size_t i;
 
 	for (i = 0; i < n; i++)
-		if (roam_config_value(opts[i], value, sizeof(value)))
+		if (roam_config_value(opts[i], value, sizeof(value))) {
+			/* unset means hostapd's default; nodes before 1.3.7 reject the option */
+			if (!strcmp(opts[i], "max_inactivity") && !strcmp(value, "0"))
+				continue;
 			blobmsg_add_string(b, opts[i], value);
+		}
 
 	blobmsg_close_table(b, t);
 }

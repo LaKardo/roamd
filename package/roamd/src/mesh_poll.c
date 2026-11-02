@@ -12,7 +12,6 @@
 #include "roamd.h"
 #include "mesh.h"
 
-#define MEMBERS_DIR	"/var/run/roamd/members"
 #define POLL_STA_MAX	32
 #define POLL_AP_MAX	8
 #define POLL_NODE_MAX	(MESH_ALLOW_MAX + 1)
@@ -34,9 +33,12 @@ struct poll_sta {
 	char mac[MESH_MAC_MAX];
 	char ssid[MESH_SSID_MAX];
 	int signal;
+	int alt_signal;
+	uint32_t alt_age;
 	uint32_t connected;
 	uint8_t band;
 	bool client;
+	bool idle;
 	bool has_btm;
 	bool btm_paused;
 	int btm_status;
@@ -59,6 +61,7 @@ struct poll_node {
 	bool managed;
 	bool online;
 	bool answered;
+	bool nbr_empty;
 	unsigned int misses;
 	struct poll_sta sta[POLL_STA_MAX];
 	unsigned int n_sta;
@@ -97,11 +100,6 @@ static char profile_sum[MESH_NET_SUM_LEN];
 static void poll_watchdog_cb(struct uloop_timeout *t);
 static struct uloop_timeout poll_watchdog = { .cb = poll_watchdog_cb };
 
-bool mesh_poll_busy(void)
-{
-	return busy;
-}
-
 bool mesh_poll_has_place(const uint8_t *addr)
 {
 	unsigned int i, j;
@@ -129,64 +127,6 @@ bool mesh_poll_has_place(const uint8_t *addr)
 	return false;
 }
 
-static const char *attr_str(struct blob_attr *table, const char *name)
-{
-	struct blob_attr *cur;
-	int rem;
-
-	if (!table)
-		return NULL;
-
-	blobmsg_for_each_attr(cur, table, rem) {
-		if (strcmp(blobmsg_name(cur), name))
-			continue;
-
-		if (blobmsg_type(cur) == BLOBMSG_TYPE_STRING)
-			return blobmsg_get_string(cur);
-
-		if (blobmsg_type(cur) == BLOBMSG_TYPE_BOOL)
-			return blobmsg_get_bool(cur) ? "true" : "false";
-
-		return NULL;
-	}
-
-	return NULL;
-}
-
-static struct blob_attr *attr_field(struct blob_attr *table, const char *name, int type)
-{
-	struct blob_attr *cur;
-	int rem;
-
-	if (!table)
-		return NULL;
-
-	blobmsg_for_each_attr(cur, table, rem)
-		if (!strcmp(blobmsg_name(cur), name) && blobmsg_type(cur) == type)
-			return cur;
-
-	return NULL;
-}
-
-static struct blob_attr *root_field(struct blob_buf *b, const char *name, int type)
-{
-	struct blob_attr *cur;
-	int rem;
-
-	blob_for_each_attr(cur, b->head, rem)
-		if (!strcmp(blobmsg_name(cur), name) && blobmsg_type(cur) == type)
-			return cur;
-
-	return NULL;
-}
-
-static uint32_t attr_u32(struct blob_attr *table, const char *name)
-{
-	struct blob_attr *cur = attr_field(table, name, BLOBMSG_TYPE_INT32);
-
-	return cur ? blobmsg_get_u32(cur) : 0;
-}
-
 static void meas_collect(struct poll_sta *s, struct blob_attr *list)
 {
 	struct blob_attr *cur;
@@ -202,17 +142,35 @@ static void meas_collect(struct poll_sta *s, struct blob_attr *list)
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE || s->n_meas >= POLL_MEAS_MAX)
 			continue;
 
-		bssid = attr_str(cur, "bssid");
-		if (!bssid || !mesh_valid_mac(bssid) || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
+		bssid = mesh_attr_str(cur, "bssid");
+		if (!bssid || !mesh_valid_mac(bssid) || !mesh_attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
 			continue;
 
-		if ((uint64_t)attr_u32(cur, "age") * 1000 > roam_meas_fresh())
+		if ((uint64_t)mesh_attr_u32(cur, "age") * 1000 > roam_meas_fresh())
 			continue;
 
 		m = &s->meas[s->n_meas++];
 		snprintf(m->bssid, sizeof(m->bssid), "%s", bssid);
-		m->signal = (int)attr_u32(cur, "signal");
+		m->signal = (int)mesh_attr_u32(cur, "signal");
 	}
+}
+
+#define ALT_SIGNAL_AGE	300
+
+/* How the device heard the client lately on its other band, from probes. */
+static void alt_collect(struct poll_sta *s, struct blob_attr *cur)
+{
+	bool low = mesh_band_from_bit(s->band) == BAND_LOW;
+	const char *key = low ? "signal_5" : "signal_24";
+	const char *age = low ? "signal_5_age" : "signal_24_age";
+
+	s->alt_signal = ROAMD_NO_SIGNAL;
+	if (!s->band || !mesh_attr_field(cur, key, BLOBMSG_TYPE_INT32) ||
+	    mesh_attr_u32(cur, age) > ALT_SIGNAL_AGE)
+		return;
+
+	s->alt_signal = (int)mesh_attr_u32(cur, key);
+	s->alt_age = mesh_attr_u32(cur, age);
 }
 
 static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client)
@@ -231,8 +189,8 @@ static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE || n->n_sta >= POLL_STA_MAX)
 			continue;
 
-		mac = attr_str(cur, "mac");
-		if (!mac || !mesh_valid_mac(mac) || !attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
+		mac = mesh_attr_str(cur, "mac");
+		if (!mac || !mesh_valid_mac(mac) || !mesh_attr_field(cur, "signal", BLOBMSG_TYPE_INT32))
 			continue;
 
 		ea = ether_aton(mac);
@@ -243,22 +201,25 @@ static void sta_collect(struct poll_node *n, struct blob_attr *list, bool client
 		memset(s, 0, sizeof(*s));
 		memcpy(s->addr, ea->ether_addr_octet, sizeof(s->addr));
 		snprintf(s->mac, sizeof(s->mac), "%s", mac);
-		ssid = attr_str(cur, "ssid");
+		ssid = mesh_attr_str(cur, "ssid");
 		if (ssid)
 			snprintf(s->ssid, sizeof(s->ssid), "%s", ssid);
-		s->signal = (int)attr_u32(cur, "signal");
-		s->connected = client ? attr_u32(cur, "connected") : 0;
-		s->band = mesh_band_bit(attr_str(cur, "band"));
+		s->signal = (int)mesh_attr_u32(cur, "signal");
+		s->connected = client ? mesh_attr_u32(cur, "connected") : 0;
+		s->band = mesh_band_bit(mesh_attr_str(cur, "band"));
 		s->client = client;
+		s->idle = client && mesh_attr_u32(cur, "inactive") >= MESH_CLIENT_IDLE;
 
-		if (client && attr_field(cur, "btm_status", BLOBMSG_TYPE_INT32)) {
+		if (client && mesh_attr_field(cur, "btm_status", BLOBMSG_TYPE_INT32)) {
 			s->has_btm = true;
-			s->btm_status = (int)attr_u32(cur, "btm_status");
-			s->btm_age = attr_u32(cur, "btm_age");
+			s->btm_status = (int)mesh_attr_u32(cur, "btm_status");
+			s->btm_age = mesh_attr_u32(cur, "btm_age");
 		}
-		s->btm_paused = client && attr_field(cur, "btm_paused", BLOBMSG_TYPE_BOOL);
-		if (client)
-			meas_collect(s, attr_field(cur, "reports", BLOBMSG_TYPE_ARRAY));
+		s->btm_paused = client && mesh_attr_field(cur, "btm_paused", BLOBMSG_TYPE_BOOL);
+		if (client) {
+			meas_collect(s, mesh_attr_field(cur, "reports", BLOBMSG_TYPE_ARRAY));
+			alt_collect(s, cur);
+		}
 	}
 }
 
@@ -277,8 +238,8 @@ static void ap_collect(struct poll_node *n, struct blob_attr *list)
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE || n->n_ap >= POLL_AP_MAX)
 			continue;
 
-		bssid = attr_str(cur, "bssid");
-		ssid = attr_str(cur, "ssid");
+		bssid = mesh_attr_str(cur, "bssid");
+		ssid = mesh_attr_str(cur, "ssid");
 		if (!bssid || !ssid || !mesh_valid_mac(bssid))
 			continue;
 
@@ -286,10 +247,10 @@ static void ap_collect(struct poll_node *n, struct blob_attr *list)
 		memset(a, 0, sizeof(*a));
 		snprintf(a->bssid, sizeof(a->bssid), "%s", bssid);
 		snprintf(a->ssid, sizeof(a->ssid), "%s", ssid);
-		band = attr_str(cur, "band");
+		band = mesh_attr_str(cur, "band");
 		if (band)
 			snprintf(a->band, sizeof(a->band), "%s", band);
-		nr = attr_str(cur, "nr");
+		nr = mesh_attr_str(cur, "nr");
 		if (nr && mesh_valid_hex(nr) && strlen(nr) < sizeof(a->nr))
 			snprintf(a->nr, sizeof(a->nr), "%s", nr);
 	}
@@ -320,7 +281,7 @@ static void member_file_write(const struct poll_node *n, struct blob_attr *repor
 	int rem;
 	FILE *f;
 
-	snprintf(path, sizeof(path), MEMBERS_DIR "/%s.json", n->id);
+	snprintf(path, sizeof(path), MESH_MEMBERS_RUN "/%s.json", n->id);
 	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
 
 	blob_buf_init(&b, 0);
@@ -338,7 +299,7 @@ static void member_file_write(const struct poll_node *n, struct blob_attr *repor
 		blobmsg_add_u8(&b, "update_available", update);
 		blobmsg_add_string(&b, "consistency", consistency);
 
-		snprintf(spath, sizeof(spath), MEMBERS_DIR "/%s.pkgsrc", n->id);
+		snprintf(spath, sizeof(spath), MESH_MEMBERS_RUN "/%s.pkgsrc", n->id);
 		src = mesh_slurp(spath, 32);
 		if (src) {
 			src[strcspn(src, "\r\n")] = 0;
@@ -378,10 +339,10 @@ static void member_file_write(const struct poll_node *n, struct blob_attr *repor
 
 static bool member_update_available(struct blob_attr *report)
 {
-	const char *os = attr_str(report, "os_version");
-	const char *arch = attr_str(report, "arch");
-	const char *have = attr_str(report, "pkg_version");
-	const char *have_ui = attr_str(report, "ui_version");
+	const char *os = mesh_attr_str(report, "os_version");
+	const char *arch = mesh_attr_str(report, "arch");
+	const char *have = mesh_attr_str(report, "pkg_version");
+	const char *have_ui = mesh_attr_str(report, "ui_version");
 	struct mesh_pkg_meta meta;
 	char branch[MESH_WORD_MAX];
 	const char *dot;
@@ -392,7 +353,7 @@ static bool member_update_available(struct blob_attr *report)
 	dot = strrchr(os, '.');
 	snprintf(branch, sizeof(branch), "%.*s", dot ? (int)(dot - os) : (int)strlen(os), os);
 
-	if (mesh_pkg_stale(branch, arch, MESH_PKG_MAIN))
+	if (mesh_pkg_wanted() && mesh_pkg_stale(branch, arch, MESH_PKG_MAIN))
 		mesh_pkg_refresh(branch, arch, MESH_PKG_MAIN, NULL, NULL);
 
 	if (mesh_pkg_known(branch, arch, MESH_PKG_MAIN, &meta) &&
@@ -402,7 +363,7 @@ static bool member_update_available(struct blob_attr *report)
 	if (!have_ui)
 		return false;
 
-	if (mesh_pkg_stale(branch, arch, MESH_PKG_UI))
+	if (mesh_pkg_wanted() && mesh_pkg_stale(branch, arch, MESH_PKG_UI))
 		mesh_pkg_refresh(branch, arch, MESH_PKG_UI, NULL, NULL);
 
 	return mesh_pkg_known(branch, arch, MESH_PKG_UI, &meta) &&
@@ -595,14 +556,17 @@ static void node_report(struct poll_node *n, struct blob_attr *result)
 
 	n->misses = 0;
 	n->online = true;
-	mesh_member_hostname(n->id, attr_str(result, "hostname"));
-	sta_collect(n, attr_field(result, "clients", BLOBMSG_TYPE_ARRAY), true);
-	sta_collect(n, attr_field(result, "heard", BLOBMSG_TYPE_ARRAY), false);
-	ap_collect(n, attr_field(result, "aps", BLOBMSG_TYPE_ARRAY));
+	mesh_member_hostname(n->id, mesh_attr_str(result, "hostname"));
+	sta_collect(n, mesh_attr_field(result, "clients", BLOBMSG_TYPE_ARRAY), true);
+	sta_collect(n, mesh_attr_field(result, "heard", BLOBMSG_TYPE_ARRAY), false);
+	ap_collect(n, mesh_attr_field(result, "aps", BLOBMSG_TYPE_ARRAY));
+	/* nodes before 1.3.7 do not report it */
+	n->nbr_empty = mesh_attr_field(result, "nbr_count", BLOBMSG_TYPE_INT32) &&
+		       !mesh_attr_u32(result, "nbr_count");
 
-	profile = attr_field(result, "profile", BLOBMSG_TYPE_TABLE);
-	nets = attr_str(profile, "networks_sum");
-	bh = attr_str(profile, "backhaul_ssid");
+	profile = mesh_attr_field(result, "profile", BLOBMSG_TYPE_TABLE);
+	nets = mesh_attr_str(profile, "networks_sum");
+	bh = mesh_attr_str(profile, "backhaul_ssid");
 
 	if (profile_sum[0] && (!nets || strcmp(nets, profile_sum))) {
 		issue = "networks";
@@ -615,7 +579,7 @@ static void node_report(struct poll_node *n, struct blob_attr *result)
 	member_file_write(n, result, cons, issue, member_update_available(result));
 
 	{
-		struct blob_attr *events = attr_field(result, "events", BLOBMSG_TYPE_ARRAY);
+		struct blob_attr *events = mesh_attr_field(result, "events", BLOBMSG_TYPE_ARRAY);
 
 		if (events && n->name[0])
 			mesh_log_ingest(n->id, n->name, events);
@@ -667,9 +631,9 @@ static void self_collect(void)
 	blob_buf_init(&self, 0);
 	mesh_node_report(&self);
 
-	sta_collect(n, root_field(&self, "clients", BLOBMSG_TYPE_ARRAY), true);
-	sta_collect(n, root_field(&self, "heard", BLOBMSG_TYPE_ARRAY), false);
-	ap_collect(n, root_field(&self, "aps", BLOBMSG_TYPE_ARRAY));
+	sta_collect(n, mesh_root_field(&self, "clients", BLOBMSG_TYPE_ARRAY), true);
+	sta_collect(n, mesh_root_field(&self, "heard", BLOBMSG_TYPE_ARRAY), false);
+	ap_collect(n, mesh_root_field(&self, "aps", BLOBMSG_TYPE_ARRAY));
 }
 
 static bool profile_build(void)
@@ -683,7 +647,9 @@ static bool profile_build(void)
 	mesh_profile_build(&b);
 
 	sum = mesh_networks_sum();
-	snprintf(profile_sum, sizeof(profile_sum), "%s", sum ? sum : "");
+	/* with no networks of its own the controller has nothing to hold the nodes to */
+	snprintf(profile_sum, sizeof(profile_sum), "%s",
+		 sum && mesh_network_at(0) ? sum : "");
 
 	json = blobmsg_format_json(b.head, true);
 	if (!json)
@@ -726,7 +692,7 @@ void mesh_poll_run(bool force)
 	force = force || force_pending;
 	force_pending = false;
 
-	mesh_dir_ensure(MEMBERS_DIR);
+	mesh_dir_ensure(MESH_MEMBERS_RUN);
 
 	if (profile_build())
 		force = true;
@@ -911,19 +877,77 @@ static void peer_clients_add(struct blob_buf *b, unsigned int self)
 	blobmsg_close_array(b, arr);
 }
 
+/*
+ * A node keeps the list in memory only, so it is sent again after a while
+ * even when nothing changed: the node may have restarted.
+ */
+#define NBR_RESEND	60000
+
+struct nbr_sent {
+	char id[MESH_ID_MAX];
+	uint32_t sum;
+	uint64_t at;
+};
+
+static struct nbr_sent nbr_sent[POLL_NODE_MAX];
+
+static uint32_t text_sum(const char *s)
+{
+	uint32_t h = 5381;
+
+	while (*s)
+		h = h * 33 + (unsigned char)*s++;
+
+	return h;
+}
+
+/* false when this node already has exactly this list */
+static bool nbr_changed(const char *id, const char *json, bool force)
+{
+	struct nbr_sent *free_slot = NULL, *oldest = &nbr_sent[0], *e = NULL;
+	uint32_t sum = text_sum(json);
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(nbr_sent) && !e; i++) {
+		if (!strcmp(nbr_sent[i].id, id))
+			e = &nbr_sent[i];
+		else if (!nbr_sent[i].id[0] && !free_slot)
+			free_slot = &nbr_sent[i];
+		else if (nbr_sent[i].at < oldest->at)
+			oldest = &nbr_sent[i];
+	}
+
+	if (!e) {
+		e = free_slot ? free_slot : oldest;
+		snprintf(e->id, sizeof(e->id), "%s", id);
+		e->at = 0;
+	}
+
+	if (!force && e->at && e->sum == sum && roam_now - e->at < NBR_RESEND)
+		return false;
+
+	e->sum = sum;
+	e->at = roam_now ? roam_now : 1;
+
+	return true;
+}
+
 static void neighbors_push(void)
 {
 	static struct blob_buf b;
-	unsigned int i, j;
+	unsigned int i, j, count;
 	char *json;
 	void *arr;
 
 	for (i = 0; i < n_nodes; i++) {
-		if (!nodes[i].online)
+		if (!nodes[i].online) {
+			nbr_changed(nodes[i].id, "", false);
 			continue;
+		}
 
 		blob_buf_init(&b, 0);
 		arr = blobmsg_open_array(&b, "neighbors");
+		count = 0;
 
 		for (j = 0; j < n_nodes; j++) {
 			unsigned int a;
@@ -940,6 +964,7 @@ static void neighbors_push(void)
 				blobmsg_add_string(&b, "ssid", ap->ssid);
 				blobmsg_add_string(&b, "nr", ap->nr);
 				blobmsg_close_table(&b, t);
+				count++;
 			}
 		}
 
@@ -950,7 +975,9 @@ static void neighbors_push(void)
 		if (!json)
 			continue;
 
-		member_call(&nodes[i], "mesh_neighbors", json);
+		/* an empty list on the node means it restarted and lost what it had */
+		if (nbr_changed(nodes[i].id, json, count && nodes[i].nbr_empty))
+			member_call(&nodes[i], "mesh_neighbors", json);
 		free(json);
 	}
 }
@@ -986,6 +1013,71 @@ static unsigned int neighbor_list(const struct poll_node *best, const uint8_t *a
 
 static const struct poll_meas *meas_find(const struct poll_sta *c, const char *bssid);
 
+#define TRAIL_MAX		64
+#define FIX_INTERVAL		600000
+#define PROBE_INTERVAL		300000
+#define TRAIL_BACK_HOLD		120000
+
+/*
+ * Where each client was before its current place and when it was last moved
+ * by a correction, so that corrections are rare and never send a client back
+ * to the place it just left.
+ */
+static struct client_trail {
+	uint8_t addr[6];
+	char home[MESH_ID_MAX];
+	uint8_t band;
+	char prev[MESH_ID_MAX];
+	uint8_t prev_band;
+	uint64_t seen;
+	uint64_t left_at;
+	uint64_t fix_at;
+	uint64_t probe_at;
+	uint64_t band_at;
+} trail[TRAIL_MAX];
+
+static struct client_trail *trail_get(const struct poll_sta *c, const char *home)
+{
+	struct client_trail *t = NULL, *oldest = &trail[0];
+	unsigned int i;
+
+	for (i = 0; i < TRAIL_MAX; i++) {
+		if (trail[i].seen && !memcmp(trail[i].addr, c->addr, 6)) {
+			t = &trail[i];
+			break;
+		}
+		if (trail[i].seen < oldest->seen)
+			oldest = &trail[i];
+	}
+
+	if (!t) {
+		t = oldest;
+		memset(t, 0, sizeof(*t));
+		memcpy(t->addr, c->addr, 6);
+	} else if (strcmp(t->home, home) || t->band != c->band) {
+		memcpy(t->prev, t->home, sizeof(t->prev));
+		t->prev_band = t->band;
+		t->left_at = roam_now ? roam_now : 1;
+	}
+
+	snprintf(t->home, sizeof(t->home), "%s", home);
+	t->band = c->band;
+	t->seen = roam_now ? roam_now : 1;
+
+	return t;
+}
+
+static bool trail_left(const struct client_trail *t, const char *node, uint8_t band)
+{
+	return t->prev[0] && !strcmp(t->prev, node) && t->prev_band == band;
+}
+
+/* The client left that place only moments ago. */
+static bool trail_left_recent(const struct client_trail *t, const char *node, uint8_t band)
+{
+	return trail_left(t, node, band) && roam_now - t->left_at < TRAIL_BACK_HOLD;
+}
+
 #define SYS_LIST_MAX		3
 #define SYS_PREF_HIGH		128
 #define SUBELEM_CAND_PREF	3
@@ -1015,8 +1107,8 @@ static bool nr_has_subelem(const char *nr, unsigned int id)
 }
 
 /* The best the client was heard by a node on a band lately, by probes or its own report. */
-static int heard_signal(const struct poll_sta *c, unsigned int from, unsigned int to,
-			unsigned int node, uint8_t band, const char *bssid)
+static int heard_signal(const struct poll_sta *c, unsigned int home, unsigned int from,
+			unsigned int to, unsigned int node, uint8_t band, const char *bssid)
 {
 	const struct poll_meas *m;
 	int best = ROAMD_NO_SIGNAL;
@@ -1037,6 +1129,10 @@ static int heard_signal(const struct poll_sta *c, unsigned int from, unsigned in
 	if (m && (best == ROAMD_NO_SIGNAL || m->signal > best))
 		best = m->signal;
 
+	if (node == home && band != c->band &&
+	    c->alt_signal != ROAMD_NO_SIGNAL && (best == ROAMD_NO_SIGNAL || c->alt_signal > best))
+		best = c->alt_signal;
+
 	return best;
 }
 
@@ -1049,12 +1145,19 @@ static int sys_cand_cmp(const void *a, const void *b)
 
 /*
  * The access points of the system the client may use, except the one it is
- * on, ranked: 5 GHz above 2.4 GHz, then by how well they heard the client.
- * 2.4 GHz is left out when a 5 GHz access point heard it well enough. The
- * client picks among them itself.
+ * on and the one it just left, ranked: 5 GHz above 2.4 GHz, then by how well
+ * they heard the client. 2.4 GHz is left out when a 5 GHz access point heard
+ * it well enough. A place heard no better than where the client is now is
+ * left out, and so is the other band of the same device when it was not
+ * heard at all: a weak client would only bounce between the two. The client
+ * picks among the rest itself.
  */
+#define WEAK_GAIN	3
+#define TRAIL_BACK_GAIN	10
+
 static unsigned int system_list(const struct poll_sta *c, unsigned int home, unsigned int from,
-				unsigned int to, char *out, size_t len)
+				unsigned int to, const struct client_trail *t,
+				char *out, size_t len)
 {
 	struct sys_cand cand[POLL_NODE_MAX * POLL_AP_MAX];
 	unsigned int i, j, n = 0, count = 0;
@@ -1073,7 +1176,7 @@ static unsigned int system_list(const struct poll_sta *c, unsigned int home, uns
 			uint8_t bit = mesh_band_bit(a->band);
 			enum roam_band rb = mesh_band_from_bit(bit);
 			struct sys_cand *e;
-			int level;
+			int level, signal;
 
 			if (!a->nr[0] || strcmp(a->ssid, c->ssid))
 				continue;
@@ -1084,10 +1187,21 @@ static unsigned int system_list(const struct poll_sta *c, unsigned int home, uns
 			if (roam_admit(c->addr, nd->id, rb) != ADMIT_OK)
 				continue;
 
+			signal = heard_signal(c, home, from, to, i, bit, a->bssid);
+			if (signal == ROAMD_NO_SIGNAL ? i == home :
+			    c->signal != ROAMD_NO_SIGNAL && signal < c->signal + WEAK_GAIN)
+				continue;
+
+			/* back where it just came from only when that is clearly better */
+			if (trail_left_recent(t, nd->id, bit) &&
+			    (signal == ROAMD_NO_SIGNAL || c->signal == ROAMD_NO_SIGNAL ||
+			     signal < c->signal + TRAIL_BACK_GAIN))
+				continue;
+
 			e = &cand[n++];
 			e->nr = a->nr;
 			e->high = rb == BAND_HIGH;
-			e->signal = heard_signal(c, from, to, i, bit, a->bssid);
+			e->signal = signal;
 
 			level = e->signal == ROAMD_NO_SIGNAL ? 1 : e->signal + 100;
 			if (level < 1)
@@ -1272,8 +1386,7 @@ static void steer_call_cb(void *priv, struct blob_attr *result, bool ok)
 		if (ok && result)
 			blobmsg_parse(rp, 2, tb, blobmsg_data(result), blobmsg_data_len(result));
 
-		/* Nodes before 1.3.1 answer with an empty table on success. */
-		sent = (ok && !tb[0]) || (tb[0] && blobmsg_get_bool(tb[0]));
+		sent = tb[0] && blobmsg_get_bool(tb[0]);
 		steer_memo_result(m, sent, tb[1] ? blobmsg_get_string(tb[1]) :
 				  ok ? NULL : "refused or unreachable");
 		if (sent && sc->args)
@@ -1365,61 +1478,6 @@ static bool meas_pick(const struct poll_sta *c, unsigned int home, const struct 
 		*best = NULL;
 
 	return measured;
-}
-
-#define TRAIL_MAX		64
-#define FIX_INTERVAL		600000
-#define PROBE_INTERVAL		300000
-
-/*
- * Where each client was before its current place and when it was last moved
- * by a correction, so that corrections are rare and never send a client back
- * to the place it just left.
- */
-static struct client_trail {
-	uint8_t addr[6];
-	char home[MESH_ID_MAX];
-	uint8_t band;
-	char prev[MESH_ID_MAX];
-	uint8_t prev_band;
-	uint64_t seen;
-	uint64_t fix_at;
-	uint64_t probe_at;
-} trail[TRAIL_MAX];
-
-static struct client_trail *trail_get(const struct poll_sta *c, const char *home)
-{
-	struct client_trail *t = NULL, *oldest = &trail[0];
-	unsigned int i;
-
-	for (i = 0; i < TRAIL_MAX; i++) {
-		if (trail[i].seen && !memcmp(trail[i].addr, c->addr, 6)) {
-			t = &trail[i];
-			break;
-		}
-		if (trail[i].seen < oldest->seen)
-			oldest = &trail[i];
-	}
-
-	if (!t) {
-		t = oldest;
-		memset(t, 0, sizeof(*t));
-		memcpy(t->addr, c->addr, 6);
-	} else if (strcmp(t->home, home) || t->band != c->band) {
-		memcpy(t->prev, t->home, sizeof(t->prev));
-		t->prev_band = t->band;
-	}
-
-	snprintf(t->home, sizeof(t->home), "%s", home);
-	t->band = c->band;
-	t->seen = roam_now ? roam_now : 1;
-
-	return t;
-}
-
-static bool trail_left(const struct client_trail *t, const char *node, uint8_t band)
-{
-	return t->prev[0] && !strcmp(t->prev, node) && t->prev_band == band;
 }
 
 /*
@@ -1523,7 +1581,7 @@ static void steer_send(const struct poll_sta *c, unsigned int home, const char *
  * access point itself from the list of the system.
  */
 static void steer_weak(const struct poll_sta *c, unsigned int home, unsigned int from,
-		       unsigned int to)
+		       unsigned int to, const struct client_trail *t)
 {
 	char args[1024], list[768];
 	struct steer_memo *memo;
@@ -1531,7 +1589,7 @@ static void steer_weak(const struct poll_sta *c, unsigned int home, unsigned int
 	if (steer_memo_holds(c, nodes[home].id, STEER_ANY))
 		return;
 
-	if (!system_list(c, home, from, to, list, sizeof(list)))
+	if (!system_list(c, home, from, to, t, list, sizeof(list)))
 		return;
 
 	snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"neighbors\":[%s]}", c->mac, list);
@@ -1541,6 +1599,68 @@ static void steer_weak(const struct poll_sta *c, unsigned int home, unsigned int
 
 	memo = steer_memo_put(c, nodes[home].id, STEER_ANY);
 	steer_send(c, home, NULL, args, memo);
+}
+
+#define BAND_UP_INTERVAL	600000
+#define BAND_UP_MARGIN		10
+#define BAND_UP_FRESH		30
+#define BAND_UP_FAIL_HOLD	3600000
+
+/*
+ * A client on 2.4 GHz that its own device heard well on 5 GHz moments ago:
+ * one request to move up, then BAND_UP_INTERVAL of quiet whatever the answer.
+ * The 5 GHz signal has to be BAND_UP_MARGIN above steer_rssi, so the client
+ * is not weak there right after the move.
+ */
+static bool steer_band_up(const struct poll_sta *c, unsigned int home, struct client_trail *t)
+{
+	const struct poll_node *n = &nodes[home];
+	uint8_t high = MESH_BAND_5;
+	char args[1024], list[768];
+	struct steer_memo *memo;
+	int need = config.rssi_good;
+
+	if (!config.band_steering || config.prefer != PREFER_HIGH)
+		return false;
+
+	if (mesh_band_from_bit(c->band) != BAND_LOW || c->alt_signal == ROAMD_NO_SIGNAL ||
+	    c->alt_age > BAND_UP_FRESH)
+		return false;
+
+	if (need < config.steer_rssi + BAND_UP_MARGIN)
+		need = config.steer_rssi + BAND_UP_MARGIN;
+	if (c->alt_signal < need)
+		return false;
+
+	if ((uint64_t)c->connected * 1000 < config.hold_time)
+		return false;
+
+	if (t->band_at && roam_now - t->band_at < BAND_UP_INTERVAL)
+		return false;
+
+	/* it came back down after the last move up: 5 GHz does not hold here */
+	if (t->band_at && trail_left(t, n->id, high) && roam_now - t->band_at < BAND_UP_FAIL_HOLD)
+		return false;
+
+	if (trail_left_recent(t, n->id, high) ||
+	    roam_admit(c->addr, n->id, BAND_HIGH) != ADMIT_OK)
+		return false;
+
+	if (!neighbor_list(n, c->addr, c->ssid, high, list, sizeof(list)))
+		return false;
+
+	t->band_at = roam_now ? roam_now : 1;
+
+	snprintf(args, sizeof(args), "{\"mac\":\"%s\",\"id\":\"%s\",\"neighbors\":[%s]}",
+		 c->mac, n->id, list);
+
+	roam_log(ROAM_L_INFO, "mesh: %s is heard on 5 GHz of %s at %d dBm (2.4 GHz %d dBm), moving it up",
+		 c->mac, n->id, c->alt_signal, c->signal);
+
+	memo = steer_memo_put(c, n->id, n->id);
+	steer_send(c, home, n->id, args, memo);
+
+	return true;
 }
 
 static void steer_client(unsigned int from, unsigned int to, unsigned int client)
@@ -1563,16 +1683,19 @@ static void steer_client(unsigned int from, unsigned int to, unsigned int client
 	t = trail_get(c, nodes[home].id);
 	steer_memo_answer(c, nodes[home].id);
 
-	if (c->btm_paused)
+	if (c->btm_paused || c->idle)
 		return;
 
 	home_ok = roam_admit(c->addr, nodes[home].id, rb) == ADMIT_OK;
 	if (home_ok && c->signal != ROAMD_NO_SIGNAL) {
+		if (c->signal >= config.steer_rssi && steer_band_up(c, home, t))
+			return;
+
 		if (c->signal > config.steer_rssi_max)
 			return;
 
 		if (c->signal < config.steer_rssi) {
-			steer_weak(c, home, from, to);
+			steer_weak(c, home, from, to, t);
 			return;
 		}
 	}
